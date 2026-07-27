@@ -1,0 +1,237 @@
+---
+# Role: ccco_contract_generator
+# Purpose: Generate CCCO contract, encryption keys, and attestation artifacts
+#          for bare metal Confidential Containers deployment (root user).
+
+- name: Ensure artifacts directory exists
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}"
+    state: directory
+    mode: '0755'
+
+# --- Auto-discover artifacts from local artifacts/ directory ---
+
+- name: Find contract encryption key (*.crt, excluding HKD*)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "*.crt"
+    excludes: "HKD*.crt"
+  delegate_to: localhost
+  register: local_contract_key_files
+
+- name: Fail if contract encryption key not found
+  ansible.builtin.fail:
+    msg: "No contract encryption key (*.crt) found in artifacts/. Expected one non-HKD *.crt file."
+  when: local_contract_key_files.matched == 0
+
+- name: Find SE header binary (*.bin)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "*.bin"
+  delegate_to: localhost
+  register: local_se_header_files
+
+- name: Fail if SE header not found
+  ansible.builtin.fail:
+    msg: "No SE header binary (*.bin) found in artifacts/."
+  when: local_se_header_files.matched == 0
+
+- name: Find sealed secret client binary (*client* or *sealed*)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "*client*"
+  delegate_to: localhost
+  register: local_sealed_client_files
+
+- name: Fail if sealed secret client not found
+  ansible.builtin.fail:
+    msg: "No sealed secret client binary (*client*) found in artifacts/."
+  when: local_sealed_client_files.matched == 0
+
+- name: Find HKD certificate (HKD*.crt)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "HKD*.crt"
+  delegate_to: localhost
+  register: local_hkd_files
+
+- name: Fail if HKD certificate not found
+  ansible.builtin.fail:
+    msg: "No HKD certificate (HKD*.crt) found in artifacts/."
+  when: local_hkd_files.matched == 0
+
+- name: Set artifact filename facts
+  ansible.builtin.set_fact:
+    artifact_contract_key: "{{ local_contract_key_files.files[0].path | basename }}"
+    artifact_se_header: "{{ local_se_header_files.files[0].path | basename }}"
+    artifact_sealed_client: "{{ local_sealed_client_files.files[0].path | basename }}"
+
+- name: Display discovered artifacts
+  ansible.builtin.debug:
+    msg:
+      - "contract_key  : {{ artifact_contract_key }}"
+      - "se_header     : {{ artifact_se_header }}"
+      - "sealed_client : {{ artifact_sealed_client }}"
+      - "hkd_cert      : {{ local_hkd_files.files[0].path | basename }}"
+
+# --- Copy artifacts to bastion ---
+
+- name: Copy artifacts to bastion
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../artifacts/{{ binary_file }}"
+    dest: "{{ scripts_dir }}/{{ binary_file }}"
+    mode: '0644'
+    remote_src: no
+  loop:
+    - "{{ artifact_contract_key }}"
+    - "{{ artifact_se_header }}"
+    - "{{ artifact_sealed_client }}"
+  loop_control:
+    loop_var: binary_file
+
+- name: Copy HKD certificate to bastion
+  ansible.builtin.copy:
+    src: "{{ local_hkd_files.files[0].path }}"
+    dest: "{{ scripts_dir }}/{{ local_hkd_files.files[0].path | basename }}"
+    mode: '0644'
+    remote_src: no
+
+- name: Set executable permission for sealed secret client
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/{{ artifact_sealed_client }}"
+    mode: '0755'
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Ensure namespace exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ namespace }}"
+
+- name: Clean previous contract artifacts
+  ansible.builtin.shell:
+    cmd: |
+      find {{ scripts_dir }} -maxdepth 1 -type f \
+        ! -name "{{ artifact_sealed_client }}" \
+        ! -name "{{ artifact_contract_key }}" \
+        ! -name "{{ artifact_se_header }}" \
+        ! -name "HKD*.crt" \
+        -delete
+    executable: /bin/bash
+
+- name: Generate REGO policy
+  ansible.builtin.copy:
+    dest: "{{ scripts_dir }}/SamplePolicyPermissiveRules.rego"
+    content: |
+      package policy
+      default AddARPNeighborsRequest := false
+      default AddSwapRequest := false
+      default CheckRequest := true
+      default CloseStdinRequest := false
+      default CopyFileRequest := false
+      CopyFileRequest {
+          allow_path(input.path)
+          dir_mode := bits.lsh(1, 31)
+          allowed_dir_permission := bits.or(dir_mode, 488)
+          input.dir_mode == allowed_dir_permission
+      }
+      allow_path(path) {
+          regex.match("/run/kata-containers/shared/containers/[[:xdigit:]]+", path)
+      }
+      default CreateContainerRequest := false
+      CreateContainerRequest {
+        allow_image(input.OCI.Annotations["io.kubernetes.cri-o.ImageName"])
+      }
+      allow_image(image_name) {
+        regex.match("quay\\.io/openshift-release-dev/ocp-v4\\.0-art-dev@sha256:[a-f0-9]{64}", image_name)
+      }
+      allow_image(image_name) {
+          image_name == "ghcr.io/ibm-hyper-protect/paynow-website:s390x-v1.0.3"
+      }
+      default CreateSandboxRequest := true
+      default DestroySandboxRequest := true
+      default GetMetricsRequest := false
+      default GetOOMEventRequest := true
+      default GuestDetailsRequest := false
+      default ListInterfacesRequest := false
+      default ListRoutesRequest := false
+      default MemHotplugByProbeRequest := false
+      default OnlineCPUMemRequest := true
+      default PauseContainerRequest := false
+      default PullImageRequest := false
+      default ReadStreamRequest := false
+      default RemoveContainerRequest := false
+      RemoveContainerRequest {
+          allow_startcontainer(input.container_id)
+      }
+      allow_startcontainer(container_id) {
+          regex.match("^[a-f0-9]{64}$", container_id)
+      }
+      default RemoveStaleVirtiofsShareMountsRequest := false
+      default ReseedRandomDevRequest := false
+      default ResumeContainerRequest := false
+      default SetGuestDateTimeRequest := false
+      default SetPolicyRequest := false
+      default SignalProcessRequest := true
+      default StartContainerRequest := false
+      StartContainerRequest {
+          allow_startcontainer(input.container_id)
+      }
+      allow_startcontainer(container_id) {
+          regex.match("^[a-f0-9]{64}$", container_id)
+      }
+      default StartTracingRequest := false
+      default StatsContainerRequest := false
+      default StopTracingRequest := false
+      default TtyWinResizeRequest := false
+      default UpdateContainerRequest := false
+      default UpdateEphemeralMountsRequest := true
+      default UpdateInterfaceRequest := true
+      default UpdateRoutesRequest := true
+      default WaitProcessRequest := false
+      default WriteStreamRequest := false
+      default WriteStdinRequest := false
+      default ReadStdoutRequest := false
+      default ReadStderrRequest := true
+      default GetIPTablesRequest := false
+      default SetIPTablesRequest := false
+      default GetGuestDetailsRequest := false
+      GetGuestDetailsRequest {
+          input.mem_block_size == true
+          input.mem_hotplug_probe == true
+      }
+      default GetVolumeStatsRequest := false
+      default ResizeVolumeRequest := false
+      default VersionRequest := false
+      default ExecProcessRequest := false
+    mode: '0644'
+
+- name: Encode REGO policy to base64
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat SamplePolicyPermissiveRules.rego | base64 -w0 > encoded_policy.txt
+    executable: /bin/bash
+
+- name: Generate sealed secret keys
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      openssl genrsa -out decryption-key.pem 2048
+      openssl rsa -in decryption-key.pem -pubout > encryption-key.pub
+      openssl genrsa -out signing-key.pem 2048
+      openssl rsa -in signing-key.pem -pubout > verification-key.pub
+    executable: /bin/bash
+
+- name: Display contract generation status
+  ansible.builtin.debug:
+    msg: "CCCO contract keys and policy generated successfully at {{ scripts_dir }}"

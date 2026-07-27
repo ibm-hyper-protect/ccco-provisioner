@@ -1,0 +1,52 @@
+---
+# Role: ccco_sealed_secrets
+# Purpose: Create sealed secret string and apply it to the cluster
+
+- name: Generate sealed secret string
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      ./{{ artifact_sealed_client }} \
+        --secret cccosecret \
+        --encryption-key encryption-key.pub \
+        --signing-key signing-key.pem \
+        --workload-secret "{{ env.contract.workload_secret }}" > sealed_secret.txt
+    executable: /bin/bash
+  register: seal_secret_result
+
+- name: Read sealed secret
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/sealed_secret.txt"
+  register: sealed_secret_content
+
+- name: Create sealed secret manifest
+  ansible.builtin.copy:
+    dest: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
+    content: |
+      apiVersion: v1
+      kind: Secret
+      metadata:
+          name: spoiler
+          namespace: {{ namespace }}
+      stringData:
+          SPOILER: {{ sealed_secret_content.content | b64decode | trim }}
+    mode: '0644'
+
+- name: Apply sealed secret to cluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    src: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
+
+- name: Extract verification and decryption keys
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat verification-key.pub | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//' > secret_verification_key.txt
+      cat decryption-key.pem | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//' > secret_decryption_key.txt
+    executable: /bin/bash
+
+- name: Display sealed secret status
+  ansible.builtin.debug:
+    msg: "Sealed secret 'spoiler' created in namespace {{ namespace }}"

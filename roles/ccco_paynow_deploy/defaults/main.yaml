@@ -1,0 +1,4 @@
+---
+# Role defaults — lowest priority, override via group_vars/all.yaml or playbook vars
+scripts_dir: "/root/ccco-artifacts"
+namespace: "default"

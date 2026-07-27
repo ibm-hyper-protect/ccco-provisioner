@@ -1,0 +1,42 @@
+# Copy this file to 'all.yaml' in the same folder and fill in your values.
+
+# Section 1 - Ansible Controller
+env:
+  controller:
+    sudo_pass: #X
+
+# Section 2 - LPAR
+  lpar:
+    host_name: #X
+    ip: #X
+    user_name: #X
+    pass: #X
+
+# Section 3 - Bastion
+  bastion:
+    vm_name: #X
+    cluster_name: #X
+    networking:
+      ip: #X
+      hostname: #X
+    access:
+      user: #X
+      pass: #X
+
+# Section 4 - Contract Security
+  contract:
+    signing_passphrase: #X      # Passphrase for the contract signing key (openssl RSA key)
+    workload_secret: #X         # Secret value passed to the sealed secret client (--workload-secret)
+
+# Section 5 - Log Router Details (optional)
+  log:
+    public_ingress_endpoint: #X
+    log_apikey: #X
+
+# Section 5 - SSH Key
+# Name of the private key used by LPAR to login to bastion. Default: ansible-ocpz
+  ansible_key_name: ansible-ocpz
+
+# Section 6 - Cluster Auth
+cluster:
+  auth_dir_path: ''  # Absolute path to the directory containing kubeconfig (e.g. /root/auth)

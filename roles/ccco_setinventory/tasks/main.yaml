@@ -1,0 +1,29 @@
+---
+- name: Find inventory directory from ansible.cfg
+  ansible.builtin.shell: |
+    grep '^inventory=' {{ ansible_config_file }} | cut -f2 -d"=" | tr -d '[:space:]'
+  register: find_inventory
+
+- name: Find absolute project path
+  ansible.builtin.shell: |
+    ansible_config="{{ ansible_config_file }}"
+    echo "${ansible_config%/*}/"
+  register: find_project
+
+- name: Set resolved hosts file path
+  ansible.builtin.set_fact:
+    hosts_file_path: "{{ (find_project.stdout | trim) + (find_inventory.stdout | trim) }}/hosts"
+
+- name: Generate hosts file from template
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: "{{ hosts_file_path }}"
+    force: yes
+
+- name: Verify inventory is valid
+  ansible.builtin.command: ansible-inventory --list
+  register: inv_check
+  failed_when: inv_check.rc != 0
+
+- name: Refresh inventory
+  ansible.builtin.meta: refresh_inventory
