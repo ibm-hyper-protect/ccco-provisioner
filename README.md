@@ -25,6 +25,25 @@ Place the following files in the `artifacts/` directory before running:
 
 ---
 
+## SSH Setup
+
+Configure passwordless SSH access from your local machine to the bastion before running the playbook.
+
+```bash
+# 1. Generate SSH key pair (skip if ~/.ssh/ansible-ocpz already exists)
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/ansible-ocpz -N ""
+
+# 2. Copy public key to bastion
+ssh-copy-id -i ~/.ssh/ansible-ocpz.pub root@<bastion-ip>
+
+# 3. Verify connection
+ssh -i ~/.ssh/ansible-ocpz root@<bastion-ip>
+```
+
+> The key name `ansible-ocpz` matches the `private_key_file` in `ansible.cfg`. If you use a different key name, update `ansible.cfg` accordingly.
+
+---
+
 ## Setup
 
 ```bash
