@@ -1,11 +1,7 @@
 # Copy this file to 'all.yaml' in the same folder and fill in your values.
 
-# Section 1 - Ansible Controller
+# Section 1 - Bastion
 env:
-  controller:
-    sudo_pass: #X
-
-# Section 2 - Bastion
   bastion:
     vm_name: #X
     cluster_name: #X
@@ -26,10 +22,6 @@ env:
     public_ingress_endpoint: #X
     log_apikey: #X
 
-# Section 5 - SSH Key
-# Name of the private SSH key used to connect to bastion. Default: ansible-ocpz
-  ansible_key_name: ansible-ocpz
-
-# Section 6 - Cluster Auth
+# Section 5 - Cluster Auth
 cluster:
   auth_dir_path: ''  # Absolute path to the directory containing kubeconfig (e.g. /root/auth)

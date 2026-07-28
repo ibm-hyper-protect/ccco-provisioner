@@ -21,16 +21,9 @@
   register: sealed_secret_content
 
 - name: Create sealed secret manifest
-  ansible.builtin.copy:
+  ansible.builtin.template:
+    src: sealed-secret-spoiler.yaml.j2
     dest: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
-    content: |
-      apiVersion: v1
-      kind: Secret
-      metadata:
-          name: spoiler
-          namespace: {{ namespace }}
-      stringData:
-          SPOILER: {{ sealed_secret_content.content | b64decode | trim }}
     mode: '0644'
 
 - name: Apply sealed secret to cluster
