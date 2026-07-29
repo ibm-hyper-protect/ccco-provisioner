@@ -32,6 +32,43 @@
     state: present
     src: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
 
+- name: Delete existing ssl-localhost secret if present
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ssl-localhost
+        namespace: "{{ namespace }}"
+
+- name: Read SSL certificate file
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/common_app_cert.pem"
+  register: ssl_cert_content
+
+- name: Read SSL key file
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/common_app_key.pem"
+  register: ssl_key_content
+
+- name: Create ssl-localhost secret from cert and key
+  no_log: true
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ssl-localhost
+        namespace: "{{ namespace }}"
+      type: Opaque
+      stringData:
+        cert: "{{ ssl_cert_content.content | b64decode }}"
+        key: "{{ ssl_key_content.content | b64decode }}"
+
 - name: Extract verification and decryption keys
   ansible.builtin.shell:
     cmd: |

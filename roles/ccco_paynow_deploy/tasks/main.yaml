@@ -86,29 +86,11 @@
     log_router_host: "{{ env.log.public_ingress_endpoint | default('') }}"
     log_router_key: "{{ env.log.log_apikey | default('') }}"
 
-- name: Create env.yaml with HKD certificate
-  ansible.builtin.shell:
-    cmd: |
-      cd {{ scripts_dir }}
-      export PUBLIC_INGRESS_ENDPOINT="{{ log_router_host }}"
-      export IAMAPIKEY="{{ log_router_key }}"
-      export HKDNAME="{{ hkd_name }}"
-      export HKDVALUE="{{ hkd_cert.content | trim }}"
-      export SIGNING_KEY="{{ signing_key.content | b64decode | trim }}"
-      cat > env.yaml << EOF
-      type: env
-      logging:
-        logRouter:
-          hostname: ${PUBLIC_INGRESS_ENDPOINT}
-          iamApiKey: ${IAMAPIKEY}
-          port: 443
-      host-attestation:
-        ${HKDNAME}:
-          description: KEY-1
-          host-key-doc: ${HKDVALUE}
-      signingKey: "${SIGNING_KEY}"
-      EOF
-    executable: /bin/bash
+- name: Create env.yaml from template
+  ansible.builtin.template:
+    src: env.yaml.j2
+    dest: "{{ scripts_dir }}/env.yaml"
+    mode: '0644'
 
 - name: Encrypt env section
   ansible.builtin.shell:

@@ -96,6 +96,18 @@
     mode: '0644'
     remote_src: no
 
+- name: Copy SSL certificate files to bastion
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../artifacts/{{ ssl_file }}"
+    dest: "{{ scripts_dir }}/{{ ssl_file }}"
+    mode: '0644'
+    remote_src: no
+  loop:
+    - common_app_cert.pem
+    - common_app_key.pem
+  loop_control:
+    loop_var: ssl_file
+
 - name: Set executable permission for sealed secret client
   ansible.builtin.file:
     path: "{{ scripts_dir }}/{{ artifact_sealed_client }}"
@@ -124,7 +136,9 @@
         ! -name "{{ artifact_sealed_client }}" \
         ! -name "{{ artifact_contract_key }}" \
         ! -name "{{ artifact_se_header }}" \
-        ! -name "HKD*.crt" \
+        ! -name 'HKD*.crt' \
+        ! -name 'common_app_cert.pem' \
+        ! -name 'common_app_key.pem' \
         -delete
     executable: /bin/bash
 

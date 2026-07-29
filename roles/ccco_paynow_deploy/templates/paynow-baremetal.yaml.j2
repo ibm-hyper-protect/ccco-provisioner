@@ -11,17 +11,28 @@ metadata:
     io.katacontainers.config.runtime.create_container_timeout: "900"
     io.katacontainers.config.hypervisor.cc_init_data: {{ initdata_content.content | b64decode | trim }}
 spec:
+  runtimeClassName: kata-cc
   containers:
   - image: ghcr.io/ibm-hyper-protect/paynow-website:s390x-v1.0.3
     name: paynow
     ports:
     - containerPort: 8443
       protocol: TCP
+    env:
+    - name: CERT
+      valueFrom:
+        secretKeyRef:
+          name: ssl-localhost
+          key: cert
+    - name: KEY
+      valueFrom:
+        secretKeyRef:
+          name: ssl-localhost
+          key: key
     volumeMounts:
-    - mountPath: /tmp
+    - mountPath: /home
       name: spoiler
   restartPolicy: Never
-  runtimeClassName: kata-cc
   volumes:
   - name: spoiler
     secret:
@@ -33,24 +44,11 @@ metadata:
   name: paynow-ssl
   namespace: {{ namespace }}
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: paynow-ssl
   ports:
-  - protocol: TCP
-    port: 8443
+  - name: https
+    protocol: TCP
+    port: 443
     targetPort: 8443
----
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: paynow-ssl
-  namespace: {{ namespace }}
-spec:
-  to:
-    kind: Service
-    name: paynow-ssl
-  port:
-    targetPort: 8443
-  tls:
-    termination: passthrough
