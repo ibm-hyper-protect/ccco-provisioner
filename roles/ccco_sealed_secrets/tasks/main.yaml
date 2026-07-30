@@ -1,8 +1,12 @@
 ---
 # Role: ccco_sealed_secrets
-# Purpose: Create sealed secret string and apply it to the cluster
+# Purpose: Create sealed secrets and apply them to the cluster
+#   - spoiler      : sealed workload secret (for CC contract) — CDH unseals via volume mount
+#   - sealed-paynow : sealed TLS cert/key — CDH unseals env vars using verificationKey/decryptionKey
+#                     from the contract (same mechanism works for kata-cc baremetal)
+# Reference: paynowautomation.sh lines 159-160
 
-- name: Generate sealed secret string
+- name: Generate sealed secret string (workload secret)
   no_log: true
   ansible.builtin.shell:
     cmd: |
@@ -26,13 +30,57 @@
     dest: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
     mode: '0644'
 
-- name: Apply sealed secret to cluster
+- name: Apply spoiler sealed secret to cluster
   kubernetes.core.k8s:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
     state: present
     src: "{{ scripts_dir }}/sealed-secret-spoiler.yaml"
 
-- name: Delete existing ssl-localhost secret if present
+# --- Seal TLS cert and key for PayNow application ---
+# Matching reference paynowautomation.sh lines 159-160:
+#   --secret $CERT  = base64-w0 of PEM used as the secret identifier
+#   --workload-secret "$CERT" = the actual value being sealed
+# CDH unseals using verificationKey + decryptionKey from the contract.
+
+- name: Seal TLS certificate
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export CERT=$(base64 -w0 common_app_cert.pem)
+      ./{{ artifact_sealed_client }} \
+        --secret "$CERT" \
+        --encryption-key encryption-key.pub \
+        --signing-key signing-key.pem \
+        --workload-secret "$CERT" > sealed_cert.txt
+    executable: /bin/bash
+
+- name: Seal TLS key
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export KEY=$(base64 -w0 common_app_key.pem)
+      ./{{ artifact_sealed_client }} \
+        --secret "$KEY" \
+        --encryption-key encryption-key.pub \
+        --signing-key signing-key.pem \
+        --workload-secret "$KEY" > sealed_key.txt
+    executable: /bin/bash
+
+- name: Read sealed certificate
+  no_log: true
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/sealed_cert.txt"
+  register: sealed_cert_content
+
+- name: Read sealed key
+  no_log: true
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/sealed_key.txt"
+  register: sealed_key_content
+
+- name: Delete existing sealed-paynow secret if present
   kubernetes.core.k8s:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
     state: absent
@@ -40,20 +88,10 @@
       apiVersion: v1
       kind: Secret
       metadata:
-        name: ssl-localhost
+        name: sealed-paynow
         namespace: "{{ namespace }}"
 
-- name: Read SSL certificate file
-  ansible.builtin.slurp:
-    src: "{{ scripts_dir }}/common_app_cert.pem"
-  register: ssl_cert_content
-
-- name: Read SSL key file
-  ansible.builtin.slurp:
-    src: "{{ scripts_dir }}/common_app_key.pem"
-  register: ssl_key_content
-
-- name: Create ssl-localhost secret from cert and key
+- name: Create sealed-paynow secret with sealed cert and key
   no_log: true
   kubernetes.core.k8s:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
@@ -62,12 +100,12 @@
       apiVersion: v1
       kind: Secret
       metadata:
-        name: ssl-localhost
+        name: sealed-paynow
         namespace: "{{ namespace }}"
       type: Opaque
       stringData:
-        cert: "{{ ssl_cert_content.content | b64decode }}"
-        key: "{{ ssl_key_content.content | b64decode }}"
+        CERT: "{{ sealed_cert_content.content | b64decode | trim }}"
+        KEY: "{{ sealed_key_content.content | b64decode | trim }}"
 
 - name: Extract verification and decryption keys
   ansible.builtin.shell:
@@ -77,6 +115,8 @@
       cat decryption-key.pem | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//' > secret_decryption_key.txt
     executable: /bin/bash
 
-- name: Display sealed secret status
+- name: Display secret status
   ansible.builtin.debug:
-    msg: "Sealed secret 'spoiler' created in namespace {{ namespace }}"
+    msg:
+      - "Sealed secret 'spoiler' created in namespace {{ namespace }}"
+      - "Sealed secret 'sealed-paynow' (CERT + KEY) created in namespace {{ namespace }}"

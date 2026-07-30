@@ -21,7 +21,7 @@ allow_image(image_name) {
   regex.match("quay\\.io/openshift-release-dev/ocp-v4\\.0-art-dev@sha256:[a-f0-9]{64}", image_name)
 }
 allow_image(image_name) {
-    image_name == "ghcr.io/ibm-hyper-protect/paynow-website:s390x-v1.0.3"
+    image_name == "{{ workload_image }}"
 }
 default CreateSandboxRequest := true
 default DestroySandboxRequest := true
@@ -66,7 +66,7 @@ default UpdateRoutesRequest := true
 default WaitProcessRequest := false
 default WriteStreamRequest := false
 default WriteStdinRequest := false
-default ReadStdoutRequest := false
+default ReadStdoutRequest := true
 default ReadStderrRequest := true
 default GetIPTablesRequest := false
 default SetIPTablesRequest := false

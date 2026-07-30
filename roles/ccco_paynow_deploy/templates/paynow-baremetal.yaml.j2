@@ -22,13 +22,13 @@ spec:
     - name: CERT
       valueFrom:
         secretKeyRef:
-          name: ssl-localhost
-          key: cert
+          name: sealed-paynow
+          key: CERT
     - name: KEY
       valueFrom:
         secretKeyRef:
-          name: ssl-localhost
-          key: key
+          name: sealed-paynow
+          key: KEY
     volumeMounts:
     - mountPath: /home
       name: spoiler
