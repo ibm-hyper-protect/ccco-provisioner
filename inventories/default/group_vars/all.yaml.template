@@ -24,4 +24,7 @@ env:
 
 # Section 5 - Cluster Auth
 cluster:
-  auth_dir_path: ''  # Absolute path to the directory containing kubeconfig (e.g. /root/auth)
+  # Folder path only — do NOT include the filename.
+  # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
+  # Example: if your kubeconfig is at /root/auth/kubeconfig, set this to /root/auth
+  auth_dir_path: ''  # e.g. /root/auth

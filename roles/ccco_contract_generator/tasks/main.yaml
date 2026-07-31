@@ -1,7 +1,11 @@
 ---
 # Role: ccco_contract_generator
-# Purpose: Generate CCCO contract, encryption keys, and attestation artifacts
-#          for bare metal Confidential Containers deployment (root user).
+# Purpose: Generate CCCO contract keys (signing/verification/encryption/decryption) and
+#          leverage pre-existing attestation artifacts (HKD cert, contract encryption cert,
+#          SE header) to build and encrypt the CC contract for bare metal Confidential
+#          Containers deployment.
+#          NOTE: The HKD certificate and contract encryption certificate are NOT generated
+#          here — they must be placed in the artifacts/ directory before running.
 
 - name: Ensure artifacts directory exists
   ansible.builtin.file:
@@ -36,16 +40,16 @@
     msg: "No SE header binary (*.bin) found in artifacts/."
   when: local_se_header_files.matched == 0
 
-- name: Find sealed secret client binary (*client* or *sealed*)
+- name: Find sealed secret client binary (ibm-ccco-sealed-secret-creator-client-*)
   ansible.builtin.find:
     paths: "{{ playbook_dir }}/../artifacts"
-    patterns: "*client*"
+    patterns: "ibm-ccco-sealed-secret-creator-client-*"
   delegate_to: localhost
   register: local_sealed_client_files
 
 - name: Fail if sealed secret client not found
   ansible.builtin.fail:
-    msg: "No sealed secret client binary (*client*) found in artifacts/."
+    msg: "No sealed secret client binary (ibm-ccco-sealed-secret-creator-client-*) found in artifacts/."
   when: local_sealed_client_files.matched == 0
 
 - name: Find HKD certificate (HKD*.crt)
@@ -141,15 +145,15 @@
 
 - name: Copy REGO policy to bastion
   ansible.builtin.template:
-    src: SamplePolicyPermissiveRules.rego.j2
-    dest: "{{ scripts_dir }}/SamplePolicyPermissiveRules.rego"
+    src: SampleRestrictedPolicyRules.rego.j2
+    dest: "{{ scripts_dir }}/SampleRestrictedPolicyRules.rego"
     mode: '0644'
 
 - name: Encode REGO policy to base64
   ansible.builtin.shell:
     cmd: |
       cd {{ scripts_dir }}
-      cat SamplePolicyPermissiveRules.rego | base64 -w0 > encoded_policy.txt
+      cat SampleRestrictedPolicyRules.rego | base64 -w0 > encoded_policy.txt
     executable: /bin/bash
 
 - name: Generate sealed secret keys

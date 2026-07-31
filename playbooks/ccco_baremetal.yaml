@@ -4,9 +4,9 @@
 #
 # Pre-requisites (place in artifacts/ directory before running):
 #   - HKD*.crt                   : Host Key Document certificate
-#   - <contract_encryption_key>  : IBM HPCS contract encryption certificate (.crt)
+#   - <contract_encryption_key>  : IBM CCCO contract encryption certificate (.crt)
 #   - <se_header>                : SE header binary (.bin)
-#   - <sealed_secret_client>     : sealed-secret-creator-client binary (*client*)
+#   - <sealed_secret_client>     : ibm-ccco-sealed-secret-creator-client-v1.2.1
 
 - name: Generate inventory hosts file from all.yaml
   hosts: localhost
