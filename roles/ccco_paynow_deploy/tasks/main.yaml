@@ -47,8 +47,8 @@
   ansible.builtin.shell:
     cmd: |
       cd {{ scripts_dir }}
-      openssl genrsa -aes128 -passout pass:{{ env.contract.signing_passphrase }} -out private.pem 4096
-      openssl rsa -in private.pem -passin pass:{{ env.contract.signing_passphrase }} -pubout -out public.pem
+      openssl genrsa -aes128 -passout pass:{{ contract.signing_passphrase }} -out private.pem 4096
+      openssl rsa -in private.pem -passin pass:{{ contract.signing_passphrase }} -pubout -out public.pem
       chmod 600 private.pem
       cat public.pem | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//' > signing_key.txt
     executable: /bin/bash
@@ -83,8 +83,8 @@
 
 - name: Set Log Router variables
   ansible.builtin.set_fact:
-    log_router_host: "{{ env.log.public_ingress_endpoint | default('') }}"
-    log_router_key: "{{ env.log.log_apikey | default('') }}"
+    log_router_host: "{{ log.public_ingress_endpoint | default('') }}"
+    log_router_key: "{{ log.log_apikey | default('') }}"
 
 - name: Create env.yaml from template
   ansible.builtin.template:
@@ -112,7 +112,7 @@
       export workload=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-workload.yaml)
       export env=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-env.yaml)
       echo "$workload$env" > contract.txt
-      cat contract.txt | tr -d "\n\r" | openssl dgst -sha256 -sign private.pem -passin pass:{{ env.contract.signing_passphrase }} | openssl enc -base64 | tr -d ' \n' > envWorkloadSignature.txt
+      cat contract.txt | tr -d "\n\r" | openssl dgst -sha256 -sign private.pem -passin pass:{{ contract.signing_passphrase }} | openssl enc -base64 | tr -d ' \n' > envWorkloadSignature.txt
     executable: /bin/bash
 
 - name: Create boot section (SE header base64)

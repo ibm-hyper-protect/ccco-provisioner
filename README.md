@@ -2,7 +2,6 @@
 
 Ansible automation to generate a CCCO contract and deploy the **PayNow** workload on a bare metal OpenShift cluster using IBM Confidential Computing Containers for Red Hat OpenShift Container Platform (CCCO).
 
----
 
 ## Prerequisites
 
@@ -23,7 +22,6 @@ Place the following files in the `artifacts/` directory before running:
 
 > Files are auto-discovered by pattern — no need to specify filenames in config.
 
----
 
 ## SSH Setup
 
@@ -42,7 +40,6 @@ ssh -i ~/.ssh/ansible-ocpz root@<bastion-ip>
 
 > The key name `ansible-ocpz` matches the `private_key_file` in `ansible.cfg`. If you use a different key name, update `ansible.cfg` accordingly.
 
----
 
 ## Setup
 
@@ -58,7 +55,6 @@ vi inventories/default/group_vars/all.yaml
 cp /path/to/your/artifacts/* artifacts/
 ```
 
----
 
 ## Run
 
@@ -74,7 +70,6 @@ This will:
 5. Build the encrypted contract (workload + env sections)
 6. Generate `paynow-baremetal.yaml` — the PayNow Pod/Service/Route manifest
 
----
 
 ## Directory structure
 
@@ -96,7 +91,6 @@ ccco-provisioner/
     └── ccco_paynow_deploy/                 # Builds encrypted contract, generates paynow-baremetal.yaml
 ```
 
----
 
 ## License
 

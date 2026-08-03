@@ -12,17 +12,17 @@ env:
       user: #X
       pass: #X
 
-# Section 3 - Contract Security
-  contract:
-    signing_passphrase: #X      # Passphrase for the contract signing key (openssl RSA key)
-    workload_secret: #X         # Secret value passed to the sealed secret client (--workload-secret)
+# Section 2 - Contract Security
+contract:
+  signing_passphrase: #X      # Passphrase for the contract signing key (openssl RSA key)
+  workload_secret: #X         # Secret value passed to the sealed secret client (--workload-secret)
 
-# Section 4 - Log Router Details (optional)
-  log:
-    public_ingress_endpoint: #X
-    log_apikey: #X
+# Section 3 - Log Router Details (optional)
+log:
+  public_ingress_endpoint: #X
+  log_apikey: #X
 
-# Section 5 - Cluster Auth
+# Section 4 - Cluster Auth
 cluster:
   # Folder path only — do NOT include the filename.
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'

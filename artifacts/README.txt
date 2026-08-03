@@ -3,7 +3,7 @@
 #   HKD*.crt                              - Host Key Document certificate
 #   <contract_encryption_key>.crt         - IBM CCCO contract encryption certificate
 #   <se_header>.bin                       - SE header binary
-#   <sealed_secret_client>                - ibm-ccco-sealed-secret-creator-client-v1.2.1
+#   <sealed_secret_client>                - ibm-ccco-sealed-secret-creator-client
 #   PayNow_app_cert.pem                   - TLS certificate for PayNow application (CERT env var)
 #   PayNow_app_key.pem                    - TLS private key for PayNow application (KEY env var)
 #

@@ -15,7 +15,7 @@
         --secret cccosecret \
         --encryption-key encryption-key.pub \
         --signing-key signing-key.pem \
-        --workload-secret "{{ env.contract.workload_secret }}" > sealed_secret.txt
+        --workload-secret "{{ contract.workload_secret }}" > sealed_secret.txt
     executable: /bin/bash
   register: seal_secret_result
 
