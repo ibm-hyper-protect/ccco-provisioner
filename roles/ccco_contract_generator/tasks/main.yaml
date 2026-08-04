@@ -1,0 +1,171 @@
+---
+# Role: ccco_contract_generator
+# Purpose: Generate CCCO contract keys (signing/verification/encryption/decryption) and
+#          leverage pre-existing attestation artifacts (HKD cert, contract encryption cert,
+#          SE header) to build and encrypt the CC contract for bare metal Confidential
+#          Containers deployment.
+#          NOTE: The HKD certificate and contract encryption certificate are NOT generated
+#          here — they must be placed in the artifacts/ directory before running.
+
+- name: Ensure artifacts directory exists
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}"
+    state: directory
+    mode: '0755'
+
+# --- Auto-discover artifacts from local artifacts/ directory ---
+
+- name: Find contract encryption key (*.crt, excluding HKD*)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "*.crt"
+    excludes: "HKD*.crt"
+  delegate_to: localhost
+  register: local_contract_key_files
+
+- name: Fail if contract encryption key not found
+  ansible.builtin.fail:
+    msg: "No contract encryption key (*.crt) found in artifacts/. Expected one non-HKD *.crt file."
+  when: local_contract_key_files.matched == 0
+
+- name: Find SE header binary (*.bin)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "*.bin"
+  delegate_to: localhost
+  register: local_se_header_files
+
+- name: Fail if SE header not found
+  ansible.builtin.fail:
+    msg: "No SE header binary (*.bin) found in artifacts/."
+  when: local_se_header_files.matched == 0
+
+- name: Find sealed secret client binary (ibm-ccco-sealed-secret-creator-client-*)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "ibm-ccco-sealed-secret-creator-client-*"
+  delegate_to: localhost
+  register: local_sealed_client_files
+
+- name: Fail if sealed secret client not found
+  ansible.builtin.fail:
+    msg: "No sealed secret client binary (ibm-ccco-sealed-secret-creator-client-*) found in artifacts/."
+  when: local_sealed_client_files.matched == 0
+
+- name: Find HKD certificate (HKD*.crt)
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../artifacts"
+    patterns: "HKD*.crt"
+  delegate_to: localhost
+  register: local_hkd_files
+
+- name: Fail if HKD certificate not found
+  ansible.builtin.fail:
+    msg: "No HKD certificate (HKD*.crt) found in artifacts/."
+  when: local_hkd_files.matched == 0
+
+- name: Set artifact filename facts
+  ansible.builtin.set_fact:
+    artifact_contract_key: "{{ local_contract_key_files.files[0].path | basename }}"
+    artifact_se_header: "{{ local_se_header_files.files[0].path | basename }}"
+    artifact_sealed_client: "{{ local_sealed_client_files.files[0].path | basename }}"
+
+- name: Display discovered artifacts
+  ansible.builtin.debug:
+    msg:
+      - "contract_key  : {{ artifact_contract_key }}"
+      - "se_header     : {{ artifact_se_header }}"
+      - "sealed_client : {{ artifact_sealed_client }}"
+      - "hkd_cert      : {{ local_hkd_files.files[0].path | basename }}"
+
+# --- Copy artifacts to bastion ---
+
+- name: Copy artifacts to bastion
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../artifacts/{{ binary_file }}"
+    dest: "{{ scripts_dir }}/{{ binary_file }}"
+    mode: '0644'
+  loop:
+    - "{{ artifact_contract_key }}"
+    - "{{ artifact_se_header }}"
+    - "{{ artifact_sealed_client }}"
+  loop_control:
+    loop_var: binary_file
+
+- name: Copy HKD certificate to bastion
+  ansible.builtin.copy:
+    src: "{{ local_hkd_files.files[0].path }}"
+    dest: "{{ scripts_dir }}/{{ local_hkd_files.files[0].path | basename }}"
+    mode: '0644'
+
+- name: Copy SSL certificate files to bastion
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../artifacts/{{ ssl_file }}"
+    dest: "{{ scripts_dir }}/{{ ssl_file }}"
+    mode: '0644'
+  loop:
+    - common_app_cert.pem
+    - common_app_key.pem
+  loop_control:
+    loop_var: ssl_file
+
+- name: Set executable permission for sealed secret client
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/{{ artifact_sealed_client }}"
+    mode: '0755'
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Ensure namespace exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ namespace }}"
+
+- name: Clean previous contract artifacts
+  ansible.builtin.shell:
+    cmd: |
+      find {{ scripts_dir }} -maxdepth 1 -type f \
+        ! -name "{{ artifact_sealed_client }}" \
+        ! -name "{{ artifact_contract_key }}" \
+        ! -name "{{ artifact_se_header }}" \
+        ! -name 'HKD*.crt' \
+        ! -name 'common_app_cert.pem' \
+        ! -name 'common_app_key.pem' \
+        -delete
+    executable: /bin/bash
+
+- name: Copy REGO policy to bastion
+  ansible.builtin.template:
+    src: SampleRestrictedPolicyRules.rego.j2
+    dest: "{{ scripts_dir }}/SampleRestrictedPolicyRules.rego"
+    mode: '0644'
+
+- name: Encode REGO policy to base64
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat SampleRestrictedPolicyRules.rego | base64 -w0 > encoded_policy.txt
+    executable: /bin/bash
+
+- name: Generate sealed secret keys
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      openssl genrsa -out decryption-key.pem 2048
+      openssl rsa -in decryption-key.pem -pubout > encryption-key.pub
+      openssl genrsa -out signing-key.pem 2048
+      openssl rsa -in signing-key.pem -pubout > verification-key.pub
+    executable: /bin/bash
+
+- name: Display contract generation status
+  ansible.builtin.debug:
+    msg: "CCCO contract keys and policy generated successfully at {{ scripts_dir }}"

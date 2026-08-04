@@ -1,0 +1,35 @@
+# -------------------------------------------------------
+# ccco-provisioner .gitignore
+# -------------------------------------------------------
+
+# Real inventory vars — NEVER commit, contains passwords/IPs
+inventories/default/group_vars/all.yaml
+
+# Auto-generated hosts file — rebuilt at runtime from all.yaml
+inventories/default/hosts
+
+# Artifacts directory — contains binary blobs and sensitive certs
+# Place your artifacts here locally; they are never committed
+artifacts/*
+!artifacts/README.txt
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Ansible retry files
+*.retry
+
+# Ansible fact cache
+.facts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo

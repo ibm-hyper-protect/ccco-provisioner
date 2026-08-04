@@ -1,0 +1,30 @@
+# Copy this file to 'all.yaml' in the same folder and fill in your values.
+
+# Section 1 - Bastion
+env:
+  bastion:
+    vm_name: #X
+    cluster_name: #X
+    networking:
+      ip: #X
+      hostname: #X
+    access:
+      user: #X
+      pass: #X
+
+# Section 2 - Contract Security
+contract:
+  signing_passphrase: #X      # Passphrase for the contract signing key (openssl RSA key)
+  workload_secret: #X         # Secret value passed to the sealed secret client (--workload-secret)
+
+# Section 3 - Log Router Details (optional)
+log:
+  public_ingress_endpoint: #X
+  log_apikey: #X
+
+# Section 4 - Cluster Auth
+cluster:
+  # Folder path only — do NOT include the filename.
+  # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
+  # Example: if your kubeconfig is at /root/auth/kubeconfig, set this to /root/auth
+  auth_dir_path: ''  # e.g. /root/auth

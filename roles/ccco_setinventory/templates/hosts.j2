@@ -1,0 +1,5 @@
+[localhost]
+127.0.0.1 ansible_connection=local
+
+[bastion]
+{{ env.bastion.networking.hostname }} ansible_host={{ env.bastion.networking.ip }} ansible_user={{ env.bastion.access.user }} ansible_ssh_pass={{ env.bastion.access.pass }} ansible_become_password={{ env.bastion.access.pass }}

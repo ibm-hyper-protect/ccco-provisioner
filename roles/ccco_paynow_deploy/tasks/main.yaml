@@ -1,0 +1,181 @@
+---
+# Role: ccco_paynow_deploy
+# Purpose: Build CCCO contract (workload + env sections) and generate PayNow pod manifest
+
+- name: Read encoded policy
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/encoded_policy.txt"
+  register: encoded_policy
+
+- name: Read verification key
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/secret_verification_key.txt"
+  register: secret_verification_key
+
+- name: Read decryption key
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/secret_decryption_key.txt"
+  register: secret_decryption_key
+
+- name: Create workload.yaml
+  ansible.builtin.copy:
+    dest: "{{ scripts_dir }}/workload.yaml"
+    content: |
+      type: workload
+      confidential-containers:
+        regoValidator:
+          policy: {{ encoded_policy.content | b64decode | trim }}
+        secret:
+          verificationKey: "{{ secret_verification_key.content | b64decode | trim }}"
+          decryptionKey: "{{ secret_decryption_key.content | b64decode | trim }}"
+    mode: '0644'
+
+- name: Encrypt workload section
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export CONTRACT_KEY="{{ artifact_contract_key }}"
+      export WORKLOAD="workload.yaml"
+      export PASSWORD="$(openssl rand 32 | base64 -w0)"
+      ENCRYPTED_PASSWORD="$(echo -n "$PASSWORD" | base64 -d | openssl pkeyutl -encrypt -inkey $CONTRACT_KEY -certin -pkeyopt rsa_padding_mode:pkcs1 | base64 -w0)"
+      export ENCRYPTED_WORKLOAD="$(echo -n "$PASSWORD" | base64 -d | openssl enc -aes-256-cbc -pbkdf2 -pass stdin -in "$WORKLOAD" | base64 -w0)"
+      echo "workload: hyper-protect-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_WORKLOAD}" > encrypted-workload.yaml
+    executable: /bin/bash
+
+- name: Generate contract signing keys
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      openssl genrsa -aes128 -passout pass:{{ contract.signing_passphrase }} -out private.pem 4096
+      openssl rsa -in private.pem -passin pass:{{ contract.signing_passphrase }} -pubout -out public.pem
+      chmod 600 private.pem
+      cat public.pem | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//' > signing_key.txt
+    executable: /bin/bash
+
+- name: Find HKD certificate file
+  ansible.builtin.find:
+    paths: "{{ scripts_dir }}"
+    patterns: "HKD*.crt"
+  register: hkd_files
+
+- name: Fail if HKD certificate not found
+  ansible.builtin.fail:
+    msg: |
+      HKD certificate not found in {{ scripts_dir }}
+      Expected file pattern: HKD*.crt
+      Please ensure the HKD certificate is placed in the artifacts/ directory.
+  when: hkd_files.matched == 0
+
+- name: Set HKD name from found certificate
+  ansible.builtin.set_fact:
+    hkd_name: "{{ hkd_files.files[0].path | basename | regex_replace('\\.crt$', '') }}"
+
+- name: Read HKD certificate
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/{{ hkd_name }}.crt"
+  register: hkd_cert
+
+- name: Read signing key
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/signing_key.txt"
+  register: signing_key
+
+- name: Set Log Router variables
+  ansible.builtin.set_fact:
+    log_router_host: "{{ log.public_ingress_endpoint | default('') }}"
+    log_router_key: "{{ log.log_apikey | default('') }}"
+
+- name: Create env.yaml from template
+  ansible.builtin.template:
+    src: env.yaml.j2
+    dest: "{{ scripts_dir }}/env.yaml"
+    mode: '0644'
+
+- name: Encrypt env section
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export ENV="env.yaml"
+      export CONTRACT_KEY="{{ artifact_contract_key }}"
+      export PASSWORD="$(openssl rand 32 | base64 -w0)"
+      export ENCRYPTED_PASSWORD="$(echo -n "$PASSWORD" | base64 -d | openssl pkeyutl -encrypt -inkey $CONTRACT_KEY -certin -pkeyopt rsa_padding_mode:pkcs1 | base64 -w0)"
+      export ENCRYPTED_ENV="$(echo -n "$PASSWORD" | base64 -d | openssl enc -aes-256-cbc -pbkdf2 -pass stdin -in "$ENV" | base64 -w0)"
+      echo "env: hyper-protect-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_ENV}" > encrypted-env.yaml
+    executable: /bin/bash
+
+- name: Generate contract signature
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export workload=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-workload.yaml)
+      export env=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-env.yaml)
+      echo "$workload$env" > contract.txt
+      cat contract.txt | tr -d "\n\r" | openssl dgst -sha256 -sign private.pem -passin pass:{{ contract.signing_passphrase }} | openssl enc -base64 | tr -d ' \n' > envWorkloadSignature.txt
+    executable: /bin/bash
+
+- name: Create boot section (SE header base64)
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat {{ artifact_se_header }} | base64 -w0 > se-header-b64.txt
+    executable: /bin/bash
+
+- name: Assemble user-data.yaml
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat > user-data.yaml << EOF
+      $(cat encrypted-workload.yaml)
+      $(cat encrypted-env.yaml)
+      envWorkloadSignature: $(cat envWorkloadSignature.txt)
+      boot: |
+          sehdr: $(cat se-header-b64.txt | tr -d '\n')
+      EOF
+    executable: /bin/bash
+
+- name: Create initdata.toml
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      export encrypted_contract=$(cat "user-data.yaml")
+      cat > initdata.toml << EOF
+      algorithm = "sha384"
+      version = "0.1.0"
+      [data]
+      "contract.yaml" = '''${encrypted_contract}'''
+      EOF
+    executable: /bin/bash
+
+- name: Create initdata annotation
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ scripts_dir }}
+      cat initdata.toml | gzip | base64 -w0 > initdata_annotation.txt
+    executable: /bin/bash
+
+- name: Read initdata annotation
+  ansible.builtin.slurp:
+    src: "{{ scripts_dir }}/initdata_annotation.txt"
+  register: initdata_content
+
+- name: Create PayNow pod manifest
+  ansible.builtin.template:
+    src: paynow-baremetal.yaml.j2
+    dest: "{{ scripts_dir }}/paynow-baremetal.yaml"
+    mode: '0644'
+
+- name: Display success and deploy instructions
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "CCCO PayNow Manifest Generated!"
+      - "=========================================="
+      - "File: {{ scripts_dir }}/paynow-baremetal.yaml"
+      - "Namespace: {{ namespace }}"
+      - "=========================================="
+      - "To deploy:"
+      - "  export KUBECONFIG={{ cluster.auth_dir_path }}/kubeconfig"
+      - "  oc apply -f {{ scripts_dir }}/paynow-baremetal.yaml"
+      - "=========================================="
