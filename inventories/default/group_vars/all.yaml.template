@@ -2,7 +2,7 @@
 
 # Section 1 - Jump Host (optional)
 jump_host:
-  ip: ""          # e.g. 9.30.187.137  — leave blank to disable
+  ip: ""          # leave blank to disable
   user: "root"    # SSH user for the jump host
 
 # Section 2 - Bastion
