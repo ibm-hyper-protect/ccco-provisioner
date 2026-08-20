@@ -3,10 +3,12 @@
 # Hosts file is auto-generated from all.yaml — no manual creation needed.
 #
 # Pre-requisites (place in artifacts/ directory before running):
-#   - HKD*.crt                   : Host Key Document certificate
-#   - <contract_encryption_key>  : IBM CCCO contract encryption certificate (.crt)
-#   - <se_header>                : SE header binary (.bin)
-#   - <sealed_secret_client>     : ibm-ccco-sealed-secret-creator-client
+#   - HKD*.crt                                   : Host Key Document certificate
+#   - <contract_encryption_key>                  : IBM CCCO contract encryption certificate (.crt)
+#   - <se_header>                                : SE header binary (.bin)
+#   - ibm-ccco-sealed-secret-creator-client-*    : Sealed secret client binary
+#   - common_app_cert.pem                        : PayNow TLS certificate
+#   - common_app_key.pem                         : PayNow TLS key
 
 - name: Generate inventory hosts file from all.yaml
   hosts: localhost
@@ -24,7 +26,7 @@
   gather_facts: false
   vars:
     scripts_dir: "/root/ccco-artifacts"
-    namespace: "default"
+    ccco_namespace: "default"
   vars_files:
     - "{{ inventory_dir }}/group_vars/all.yaml"
   tasks:
@@ -35,9 +37,13 @@
           - "CCCO Baremetal PayNow Deployment"
           - "=========================================="
           - "Host      : {{ inventory_hostname }}"
-          - "Namespace : {{ namespace }}"
+          - "Namespace : {{ ccco_namespace }}"
           - "Artifacts : {{ scripts_dir }}"
           - "=========================================="
+
+    - name: Install Node Feature Discovery (NFD) Operator
+      ansible.builtin.import_role:
+        name: ccco_install_nfd
 
     - name: Generate CCCO contract keys and policy
       ansible.builtin.import_role:

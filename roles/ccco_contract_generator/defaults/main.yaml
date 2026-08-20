@@ -1,5 +1,5 @@
 ---
 # Role defaults — override in playbook vars or group_vars
 scripts_dir: "/root/ccco-artifacts"
-namespace: "default"
+ccco_namespace: "default"
 workload_image: "ghcr.io/ibm-hyper-protect/paynow-website:s390x-v1.0.3"

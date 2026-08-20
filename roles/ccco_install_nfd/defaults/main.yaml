@@ -1,0 +1,6 @@
+---
+# Role defaults — override in group_vars/all.yaml
+# Catalog source for the NFD operator subscription.
+# Connected cluster    : redhat-operators
+# Disconnected cluster : name of your mirrored CatalogSource
+nfd_source: "redhat-operators"

@@ -1,6 +1,11 @@
 # Copy this file to 'all.yaml' in the same folder and fill in your values.
 
-# Section 1 - Bastion
+# Section 1 - Jump Host (optional)
+jump_host:
+  ip: ""          # e.g. 9.30.187.137  — leave blank to disable
+  user: "root"    # SSH user for the jump host
+
+# Section 2 - Bastion
 env:
   bastion:
     vm_name: #X
@@ -12,17 +17,20 @@ env:
       user: #X
       pass: #X
 
-# Section 2 - Contract Security
+# Section 3 - Contract Security
 contract:
   signing_passphrase: #X      # Passphrase for the contract signing key (openssl RSA key)
   workload_secret: #X         # Secret value passed to the sealed secret client (--workload-secret)
 
-# Section 3 - Log Router Details (optional)
+# Section 4 - Log Router Details (optional)
 log:
   public_ingress_endpoint: #X
   log_apikey: #X
 
-# Section 4 - Cluster Auth
+# Section 5 - NFD Operator
+nfd_source: "redhat-operators"    # Catalog source for the NFD operator subscription.
+
+# Section 6 - Cluster Auth
 cluster:
   # Folder path only — do NOT include the filename.
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
