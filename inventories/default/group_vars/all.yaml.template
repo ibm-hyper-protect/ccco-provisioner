@@ -2,8 +2,9 @@
 
 # Section 1 - Jump Host (optional)
 jump_host:
-  ip: ""          # leave blank to disable
-  user: "root"    # SSH user for the jump host
+  ip: ""      # leave blank to disable
+  user: ""
+  pass: ""    # leave blank if SSH key is set; set password if not
 
 # Section 2 - Bastion
 env:
