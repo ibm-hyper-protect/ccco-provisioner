@@ -1,0 +1,14 @@
+apiVersion: nfd.openshift.io/v1alpha1
+kind: NodeFeatureRule
+metadata:
+  name: ibm-se-rule
+  namespace: openshift-nfd
+spec:
+  rules:
+    - name: "ibm.se.enabled"
+      labels:
+        feature.node.kubernetes.io/cpu-security.se.enabled: "true"
+      matchFeatures:
+        - feature: cpu.security
+          matchExpressions:
+            se.enabled: { op: IsTrue }

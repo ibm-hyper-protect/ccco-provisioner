@@ -1,0 +1,24 @@
+---
+# Usage: ansible-playbook playbooks/ccco_install_nfd.yaml
+# Installs the Node Feature Discovery (NFD) Operator standalone,
+
+- name: Generate inventory hosts file from all.yaml
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/default/group_vars/all.yaml"
+  tasks:
+    - name: Set inventory
+      ansible.builtin.import_role:
+        name: ccco_setinventory
+
+- name: Install Node Feature Discovery (NFD) Operator
+  hosts: bastion
+  gather_facts: false
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all.yaml"
+  tasks:
+    - name: Install NFD Operator
+      ansible.builtin.import_role:
+        name: ccco_install_nfd

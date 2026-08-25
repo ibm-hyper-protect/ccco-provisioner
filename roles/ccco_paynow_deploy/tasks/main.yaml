@@ -173,7 +173,7 @@
       - "CCCO PayNow Manifest Generated!"
       - "=========================================="
       - "File: {{ scripts_dir }}/paynow-baremetal.yaml"
-      - "Namespace: {{ namespace }}"
+      - "Namespace: {{ ccco_namespace }}"
       - "=========================================="
       - "To deploy:"
       - "  export KUBECONFIG={{ cluster.auth_dir_path }}/kubeconfig"

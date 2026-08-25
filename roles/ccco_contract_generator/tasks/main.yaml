@@ -128,7 +128,7 @@
       apiVersion: v1
       kind: Namespace
       metadata:
-        name: "{{ namespace }}"
+        name: "{{ ccco_namespace }}"
 
 - name: Clean previous contract artifacts
   ansible.builtin.shell:

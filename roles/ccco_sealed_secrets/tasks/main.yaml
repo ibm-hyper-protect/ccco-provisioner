@@ -89,7 +89,7 @@
       kind: Secret
       metadata:
         name: sealed-paynow
-        namespace: "{{ namespace }}"
+        namespace: "{{ ccco_namespace }}"
 
 - name: Create sealed-paynow secret with sealed cert and key
   no_log: true
@@ -101,7 +101,7 @@
       kind: Secret
       metadata:
         name: sealed-paynow
-        namespace: "{{ namespace }}"
+        namespace: "{{ ccco_namespace }}"
       type: Opaque
       stringData:
         CERT: "{{ sealed_cert_content.content | b64decode | trim }}"
@@ -118,5 +118,5 @@
 - name: Display secret status
   ansible.builtin.debug:
     msg:
-      - "Sealed secret 'spoiler' created in namespace {{ namespace }}"
-      - "Sealed secret 'sealed-paynow' (CERT + KEY) created in namespace {{ namespace }}"
+      - "Sealed secret 'spoiler' created in namespace {{ ccco_namespace }}"
+      - "Sealed secret 'sealed-paynow' (CERT + KEY) created in namespace {{ ccco_namespace }}"

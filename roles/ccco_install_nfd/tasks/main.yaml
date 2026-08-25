@@ -1,0 +1,171 @@
+---
+# Role: ccco_install_nfd
+# Purpose: Install the Node Feature Discovery (NFD) Operator on OpenShift,
+#          create the NodeFeatureDiscovery CR to start node labelling, and
+#          apply the IBM Secure Execution NodeFeatureRule so worker nodes
+#          are labelled with feature.node.kubernetes.io/cpu-security.se.enabled.
+#
+# Steps:
+#   1. Create openshift-nfd Namespace
+#   2. Create OperatorGroup
+#   3. Create Subscription (catalog source configurable via nfd_source)
+#   4. Wait for CSV to reach Succeeded
+#   5. Create NodeFeatureDiscovery CR
+#   6. Apply IBM SE NodeFeatureRule CR
+#   7. Wait for NFD worker + master pods to be Running
+#   8. Verify node labels are populated
+#   9. Report IBM SE label presence per worker node
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Install Node Feature Discovery (NFD) Operator
+  block:
+
+    # -----------------------------------------------------------------------
+    # Step 1: Create Namespace
+    # -----------------------------------------------------------------------
+    - name: Create openshift-nfd namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: nfd-namespace.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 2: Create OperatorGroup
+    # -----------------------------------------------------------------------
+    - name: Create NFD OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: nfd-operatorgroup.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 3: Create Subscription
+    # -----------------------------------------------------------------------
+    - name: Create NFD Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: nfd-subscription.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 4: Wait for CSV to reach Succeeded
+    # -----------------------------------------------------------------------
+    - name: Wait for NFD CSV to reach Succeeded phase
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-nfd
+      register: nfd_csv_list
+      until: >-
+        nfd_csv_list.resources | length > 0 and
+        (nfd_csv_list.resources | selectattr('status.phase', 'defined') |
+         selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0)
+      retries: 30
+      delay: 20
+
+    # Display the CSV that actually reached Succeeded — not blindly resources[0]
+    - name: Display NFD CSV status
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            nfd_csv_list.resources |
+            selectattr('status.phase', 'defined') |
+            selectattr('status.phase', 'equalto', 'Succeeded') |
+            map(attribute='metadata.name') | list
+          }} reached Succeeded
+
+    # -----------------------------------------------------------------------
+    # Step 5: Create NodeFeatureDiscovery CR
+    # -----------------------------------------------------------------------
+    - name: Create NodeFeatureDiscovery CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: nfd-instance.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 6: Apply IBM SE NodeFeatureRule CR
+    # -----------------------------------------------------------------------
+    - name: Apply IBM SE NodeFeatureRule CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: nfd-se-rule.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 7: Wait for NFD worker + master pods to be Running
+    # Scoped to pods with app=nfd label to avoid fragility from transient
+    # install/completed pods that may also appear in openshift-nfd.
+    # -----------------------------------------------------------------------
+    - name: Wait for NFD worker and master pods to be Running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        kind: Pod
+        namespace: openshift-nfd
+        label_selectors:
+          - "app in (nfd-master, nfd-worker)"
+      register: nfd_pods
+      until: >-
+        nfd_pods.resources | length > 0 and
+        (nfd_pods.resources |
+         rejectattr('status.phase', 'equalto', 'Running') |
+         rejectattr('status.phase', 'equalto', 'Succeeded') | list | length == 0)
+      retries: 18
+      delay: 10
+
+    - name: Display NFD pod statuses
+      ansible.builtin.debug:
+        msg: >-
+          {%- set result = [] -%}
+          {%- for pod in nfd_pods.resources -%}
+            {%- set _ = result.append(pod.metadata.name ~ ' → ' ~ pod.status.phase) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    # -----------------------------------------------------------------------
+    # Step 8: Verify node labels are populated
+    # -----------------------------------------------------------------------
+    - name: Wait for NFD node labels to be present
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        kind: Node
+      register: nfd_nodes
+      until: >-
+        (nfd_nodes.resources |
+         map(attribute='metadata.labels') |
+         map('dict2items') | flatten |
+         selectattr('key', 'match', '^feature\\.node\\.kubernetes\\.io') |
+         list | length) > 0
+      retries: 10
+      delay: 30
+
+    # -----------------------------------------------------------------------
+    # Step 9: Report IBM SE label per worker node
+    # -----------------------------------------------------------------------
+    - name: Report SE label per worker node
+      ansible.builtin.debug:
+        msg: >-
+          {%- set result = [] -%}
+          {%- for node in nfd_nodes.resources -%}
+            {%- set labels = node.metadata.labels | default({}) -%}
+            {%- if 'node-role.kubernetes.io/worker' in labels -%}
+              {%- set se = 'feature.node.kubernetes.io/cpu-security.se.enabled' in labels -%}
+              {%- set _ = result.append(node.metadata.name ~ '  se_label=' ~ se) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Display NFD installation complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "NFD Operator installed successfully"
+          - "Namespace : openshift-nfd"
+          - "Source    : {{ nfd_source }}"
+          - "=========================================="
