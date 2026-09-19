@@ -1,0 +1,25 @@
+---
+# Usage: ansible-playbook playbooks/ccco_clean_se.yaml
+# Idempotent removal of the SE MachineConfigs (master and/or worker).
+# Waits for MCP rollout to complete after removal.
+
+- name: Generate inventory hosts file from all.yaml
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/default/group_vars/all.yaml"
+  tasks:
+    - name: Set inventory
+      ansible.builtin.import_role:
+        name: ccco_setinventory
+
+- name: Remove IBM Secure Execution (SE) MachineConfigs
+  hosts: bastion
+  gather_facts: false
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all.yaml"
+  tasks:
+    - name: Remove SE MachineConfigs
+      ansible.builtin.import_role:
+        name: ccco_remove_se

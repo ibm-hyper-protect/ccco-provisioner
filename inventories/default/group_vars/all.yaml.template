@@ -31,7 +31,16 @@ log:
 # Section 5 - NFD Operator
 nfd_source: "redhat-operators"    # Catalog source for the NFD operator subscription.
 
-# Section 6 - Cluster Auth
+# Section 6 - OSC (OpenShift Sandboxed Containers) Operator
+osc_source: "redhat-operators"   # Catalog source for the OSC operator subscription.
+osc_version: ""                  # OSC CSV version, e.g. v1.7.0
+
+# Section 7 - KataConfig
+kata:
+  addon_image: ""   # e.g. quay.io/ibm_hpcc/ibm-confidential-computing-container:1.2.2.1
+  kernel_path: ""   # e.g. /image/ccco-bm-2.0.11.img
+
+# Section 8 - Cluster Auth
 cluster:
   # Folder path only — do NOT include the filename.
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'

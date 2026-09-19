@@ -1,0 +1,184 @@
+---
+# Role: ccco_install_osc
+# Purpose: Install the OpenShift Sandboxed Containers (OSC) Operator on OpenShift
+#          using Manual InstallPlan approval, wait for CSV Succeeded, and verify pods.
+#
+# Steps:
+#   1. Create openshift-sandboxed-containers-operator Namespace
+#   2. Create OperatorGroup
+#   3. Create Subscription (Manual approval, configurable via osc_source / osc_version)
+#   4. Find and approve the InstallPlan (idempotent)
+#   5. Wait for CSV to reach Succeeded (30×20s)
+#   6. Wait for OSC pods to be Running
+
+- name: Assert osc_version is set
+  ansible.builtin.assert:
+    that: osc_version | length > 0
+    fail_msg: >-
+      osc_version must be set in inventories/default/group_vars/all.yaml
+      (e.g. osc_version: "v1.13.1")
+    success_msg: "osc_version={{ osc_version }} — OK"
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Install OpenShift Sandboxed Containers (OSC) Operator
+  block:
+
+    # -----------------------------------------------------------------------
+    # Step 1: Create Namespace
+    # -----------------------------------------------------------------------
+    - name: Create openshift-sandboxed-containers-operator namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: osc-namespace.yaml.j2
+
+    - name: Wait for namespace to become Active
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Namespace
+        name: openshift-sandboxed-containers-operator
+      register: osc_ns
+      until: >-
+        osc_ns.resources | length > 0 and
+        osc_ns.resources[0].status.phase == 'Active'
+      retries: 12
+      delay: 5
+
+    # -----------------------------------------------------------------------
+    # Step 2: Create OperatorGroup
+    # -----------------------------------------------------------------------
+    - name: Create OSC OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: osc-operatorgroup.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 3: Create Subscription (Manual approval)
+    # -----------------------------------------------------------------------
+    - name: Create OSC Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: osc-subscription.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 4: Find and approve the InstallPlan (idempotent)
+    # -----------------------------------------------------------------------
+    - name: Wait for InstallPlan to appear
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        namespace: openshift-sandboxed-containers-operator
+      register: osc_installplans
+      until: >-
+        osc_installplans.resources | length > 0 and
+        (osc_installplans.resources |
+         selectattr('spec.clusterServiceVersionNames', 'defined') |
+         list |
+         map(attribute='spec.clusterServiceVersionNames') |
+         flatten |
+         select('equalto', 'sandboxed-containers-operator.' ~ osc_version) |
+         list | length > 0)
+      retries: 18
+      delay: 10
+
+    - name: Build list of InstallPlans to approve
+      # clusterServiceVersionNames is a list attribute — standard Jinja2 has no
+      # 'contains'/'issuperset' test for selectattr on list values.
+      # Use a for-loop set_fact to filter plans whose CSV names list includes the target.
+      ansible.builtin.set_fact:
+        osc_plans_to_approve: >-
+          {%- set target = 'sandboxed-containers-operator.' ~ osc_version -%}
+          {%- set result = [] -%}
+          {%- for plan in osc_installplans.resources
+              | selectattr('spec.clusterServiceVersionNames', 'defined')
+              | rejectattr('spec.approved', 'equalto', true)
+              | list -%}
+            {%- if target in plan.spec.clusterServiceVersionNames -%}
+              {%- set _ = result.append(plan) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Approve InstallPlan
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        name: "{{ item.metadata.name }}"
+        namespace: openshift-sandboxed-containers-operator
+        state: present
+        definition:
+          spec:
+            approved: true
+      loop: "{{ osc_plans_to_approve }}"
+      when: osc_plans_to_approve | length > 0
+
+    # -----------------------------------------------------------------------
+    # Step 5: Wait for CSV to reach Succeeded
+    # -----------------------------------------------------------------------
+    - name: Wait for OSC CSV to reach Succeeded phase
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-sandboxed-containers-operator
+      register: osc_csv_list
+      until: >-
+        osc_csv_list.resources | length > 0 and
+        (osc_csv_list.resources | selectattr('status.phase', 'defined') |
+         selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0)
+      retries: 30
+      delay: 20
+
+    - name: Display OSC CSV status
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            osc_csv_list.resources |
+            selectattr('status.phase', 'defined') |
+            selectattr('status.phase', 'equalto', 'Succeeded') |
+            map(attribute='metadata.name') | list
+          }} reached Succeeded
+
+    # -----------------------------------------------------------------------
+    # Step 6: Wait for OSC pods to be Running
+    # -----------------------------------------------------------------------
+    - name: Wait for OSC controller pods to be Running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        kind: Pod
+        namespace: openshift-sandboxed-containers-operator
+      register: osc_pods
+      until: >-
+        osc_pods.resources | length > 0 and
+        (osc_pods.resources |
+         rejectattr('status.phase', 'equalto', 'Running') |
+         rejectattr('status.phase', 'equalto', 'Succeeded') | list | length == 0)
+      retries: 18
+      delay: 10
+
+    - name: Display OSC pod statuses
+      ansible.builtin.debug:
+        msg: >-
+          {{ osc_pods.resources | map(attribute='metadata.name') | list |
+             zip(osc_pods.resources | map(attribute='status.phase') | list) |
+             map('join', ' → ') | list }}
+
+    - name: Display OSC installation complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "OSC Operator installed successfully"
+          - "Namespace : openshift-sandboxed-containers-operator"
+          - "Source    : {{ osc_source }}"
+          - "Version   : {{ osc_version }}"
+          - "=========================================="

@@ -1,0 +1,129 @@
+---
+# Role: ccco_remove_osc
+# Purpose: Idempotent OSC uninstall. Reads installedCSV from Subscription;
+#          skips gracefully if OSC is not installed.
+#
+# Steps:
+#   Guard: k8s_info → Subscription sandboxed-containers-operator
+#          in openshift-sandboxed-containers-operator
+#          → set osc_installed_csv from status.installedCSV (empty = skip all)
+#   1. Delete Subscription sandboxed-containers-operator
+#   2. Delete CSV by exact name (osc_installed_csv)
+#   3. Delete OperatorGroup openshift-sandboxed-containers-operator — ignore_errors
+#   4. Delete Namespace openshift-sandboxed-containers-operator
+#   5. Wait NS fully gone (18×10s)
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Remove OpenShift Sandboxed Containers (OSC) Operator
+  block:
+
+    # -----------------------------------------------------------------------
+    # Guard: check whether OSC Subscription exists
+    # -----------------------------------------------------------------------
+    - name: Check if OSC Subscription exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: sandboxed-containers-operator
+        namespace: openshift-sandboxed-containers-operator
+      register: osc_subscription_info
+
+    - name: Set osc_installed_csv fact
+      ansible.builtin.set_fact:
+        osc_installed_csv: >-
+          {{ osc_subscription_info.resources | map(attribute='status.installedCSV')
+             | select | first | default('') }}
+
+    - name: Display OSC installation status
+      ansible.builtin.debug:
+        msg: >-
+          OSC Subscription {{ 'found — CSV: ' ~ osc_installed_csv
+          if osc_installed_csv != '' else 'not found — skipping removal' }}
+
+    # -----------------------------------------------------------------------
+    # Step 1: Delete Subscription
+    # -----------------------------------------------------------------------
+    - name: Delete OSC Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: sandboxed-containers-operator
+        namespace: openshift-sandboxed-containers-operator
+        state: absent
+      when: osc_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 2: Delete CSV by exact name
+    # -----------------------------------------------------------------------
+    - name: Delete OSC ClusterServiceVersion
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ osc_installed_csv }}"
+        namespace: openshift-sandboxed-containers-operator
+        state: absent
+      when: osc_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 3: Delete OperatorGroup
+    # -----------------------------------------------------------------------
+    - name: Delete OSC OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: openshift-sandboxed-containers-operator
+        namespace: openshift-sandboxed-containers-operator
+        state: absent
+      ignore_errors: true
+      when: osc_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 4: Delete Namespace
+    # -----------------------------------------------------------------------
+    - name: Delete openshift-sandboxed-containers-operator Namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Namespace
+        name: openshift-sandboxed-containers-operator
+        state: absent
+      when: osc_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 5: Wait for Namespace to be fully gone
+    # -----------------------------------------------------------------------
+    - name: Wait for openshift-sandboxed-containers-operator Namespace to be deleted
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Namespace
+        name: openshift-sandboxed-containers-operator
+      register: osc_ns_check
+      until: osc_ns_check.resources | length == 0
+      retries: 18
+      delay: 10
+      when: osc_installed_csv != ""
+
+    - name: Display OSC removal complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "OSC Operator removed successfully"
+          - "CSV       : {{ osc_installed_csv }}"
+          - "Namespace : openshift-sandboxed-containers-operator — deleted"
+          - "=========================================="
+      when: osc_installed_csv != ""
+
+    - name: Display OSC already absent
+      ansible.builtin.debug:
+        msg: "OSC Subscription not found — nothing to remove"
+      when: osc_installed_csv == ""

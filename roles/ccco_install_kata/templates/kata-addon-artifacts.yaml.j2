@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kata-addon-artifacts
+  namespace: openshift-sandboxed-containers-operator
+data:
+  addonImage: "{{ kata.addon_image }}"
+  kernelPath: "{{ kata.kernel_path }}"

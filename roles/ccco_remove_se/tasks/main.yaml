@@ -1,0 +1,186 @@
+---
+# Role: ccco_remove_se
+# Purpose: Idempotent SE MachineConfig removal. Checks each MC independently
+#          so either or both can be absent without failure.
+#
+# Steps:
+#   Guard (master): k8s_info → MachineConfig 99-master-enable-secure-execution
+#                   → mc_master_present (bool)
+#   Guard (worker): k8s_info → MachineConfig 99-worker-enable-secure-execution
+#                   → mc_worker_present (bool)
+#   1. Delete master SE MachineConfig — when mc_master_present
+#   2. Delete worker SE MachineConfig — when mc_worker_present
+#   3. Pause 90s → wait master MCP Updated=True, Updating=False, Degraded=False (30×60s)
+#      — when master MC was deleted
+#   4. Pause 90s → wait worker MCP same conditions (30×60s)
+#      — when worker MC was deleted
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Remove IBM Secure Execution (SE) MachineConfigs
+  block:
+
+    # -----------------------------------------------------------------------
+    # Guard: check whether master SE MachineConfig exists
+    # -----------------------------------------------------------------------
+    - name: Check if master SE MachineConfig exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+        name: 99-master-enable-secure-execution
+      register: mc_master_info
+
+    - name: Set mc_master_present fact
+      ansible.builtin.set_fact:
+        mc_master_present: "{{ mc_master_info.resources | length > 0 }}"
+
+    # -----------------------------------------------------------------------
+    # Guard: check whether worker SE MachineConfig exists
+    # -----------------------------------------------------------------------
+    - name: Check if worker SE MachineConfig exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+        name: 99-worker-enable-secure-execution
+      register: mc_worker_info
+
+    - name: Set mc_worker_present fact
+      ansible.builtin.set_fact:
+        mc_worker_present: "{{ mc_worker_info.resources | length > 0 }}"
+
+    - name: Display SE MachineConfig status
+      ansible.builtin.debug:
+        msg:
+          - "99-master-enable-secure-execution : {{ 'present' if mc_master_present | bool else 'absent' }}"
+          - "99-worker-enable-secure-execution : {{ 'present' if mc_worker_present | bool else 'absent' }}"
+
+    # -----------------------------------------------------------------------
+    # Step 1: Delete master SE MachineConfig
+    # -----------------------------------------------------------------------
+    - name: Delete master SE MachineConfig
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+        name: 99-master-enable-secure-execution
+        state: absent
+      when: mc_master_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 2: Delete worker SE MachineConfig
+    # -----------------------------------------------------------------------
+    - name: Delete worker SE MachineConfig
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+        name: 99-worker-enable-secure-execution
+        state: absent
+      when: mc_worker_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 3: Wait for master MCP rollout after master MC removal
+    #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
+    #         Budget: 30 retries × 60s = 30 minutes
+    # -----------------------------------------------------------------------
+    - name: Pause 90s for master MCP reconciler to start after SE MC removal
+      ansible.builtin.pause:
+        seconds: 90
+      when: mc_master_present | bool
+
+    - name: Wait for master MachineConfigPool rollout to complete after SE removal
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+        name: master
+      register: mcp_master_se_wait
+      until: >-
+        (mcp_master_se_wait.resources | length > 0) and
+        (mcp_master_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updated') |
+          selectattr('status', 'equalto', 'True') | list | length > 0) and
+        (mcp_master_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updating') |
+          selectattr('status', 'equalto', 'False') | list | length > 0) and
+        (mcp_master_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Degraded') |
+          selectattr('status', 'equalto', 'False') | list | length > 0)
+      retries: 30
+      delay: 60
+      when: mc_master_present | bool
+
+    - name: Display master MCP final conditions after SE removal
+      ansible.builtin.debug:
+        msg: >-
+          {%- set conds = (mcp_master_se_wait.resources | default([{}]))[0].status.conditions | default([]) -%}
+          {%- set result = [] -%}
+          {%- for c in conds -%}
+            {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
+          {%- endfor -%}
+          master MCP conditions: {{ result | join(', ') }}
+      when: mc_master_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 4: Wait for worker MCP rollout after worker MC removal
+    #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
+    #         Budget: 30 retries × 60s = 30 minutes
+    # -----------------------------------------------------------------------
+    - name: Pause 90s for worker MCP reconciler to start after SE MC removal
+      ansible.builtin.pause:
+        seconds: 90
+      when: mc_worker_present | bool
+
+    - name: Wait for worker MachineConfigPool rollout to complete after SE removal
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+        name: worker
+      register: mcp_worker_se_wait
+      until: >-
+        (mcp_worker_se_wait.resources | length > 0) and
+        (mcp_worker_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updated') |
+          selectattr('status', 'equalto', 'True') | list | length > 0) and
+        (mcp_worker_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updating') |
+          selectattr('status', 'equalto', 'False') | list | length > 0) and
+        (mcp_worker_se_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Degraded') |
+          selectattr('status', 'equalto', 'False') | list | length > 0)
+      retries: 30
+      delay: 60
+      when: mc_worker_present | bool
+
+    - name: Display worker MCP final conditions after SE removal
+      ansible.builtin.debug:
+        msg: >-
+          {%- set conds = (mcp_worker_se_wait.resources | default([{}]))[0].status.conditions | default([]) -%}
+          {%- set result = [] -%}
+          {%- for c in conds -%}
+            {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
+          {%- endfor -%}
+          worker MCP conditions: {{ result | join(', ') }}
+      when: mc_worker_present | bool
+
+    - name: Display SE removal complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "SE MachineConfigs removed successfully"
+          - "99-master-enable-secure-execution : {{ 'deleted' if mc_master_present | bool else 'was already absent' }}"
+          - "99-worker-enable-secure-execution : {{ 'deleted' if mc_worker_present | bool else 'was already absent' }}"
+          - "=========================================="

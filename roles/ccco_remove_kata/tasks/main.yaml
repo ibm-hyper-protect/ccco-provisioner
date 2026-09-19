@@ -1,0 +1,164 @@
+---
+# Role: ccco_remove_kata
+# Purpose: Idempotent KataConfig uninstall. Checks existence first; skips
+#          gracefully if KataConfig is not installed.
+#
+# Steps:
+#   Guard: k8s_info → KataConfig cluster-kataconfig → kataconfig_count
+#          (0 = skip all)
+#   1. Delete KataConfig CR — when kataconfig_count > 0
+#   2. Wait for KataConfig CR to be fully deleted (60×60s = 60 minutes)
+#   3. Pause 90s → wait master MCP Updated=True, Updating=False, Degraded=False
+#      (30×60s = 30 minutes)
+#   4. Verify kata-cc RuntimeClass is removed: count == 0 + assert
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Remove KataConfig and Kata runtime
+  block:
+
+    # -----------------------------------------------------------------------
+    # Guard: check whether KataConfig CR exists
+    # -----------------------------------------------------------------------
+    - name: Check if KataConfig cluster-kataconfig exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: kataconfiguration.openshift.io/v1
+        kind: KataConfig
+        name: cluster-kataconfig
+      register: kataconfig_info
+
+    - name: Set kataconfig_present fact
+      ansible.builtin.set_fact:
+        kataconfig_present: "{{ kataconfig_info.resources | length > 0 }}"
+
+    - name: Display KataConfig status
+      ansible.builtin.debug:
+        msg: >-
+          KataConfig cluster-kataconfig {{ 'found — proceeding with removal'
+          if kataconfig_present | bool
+          else 'not found — skipping removal' }}
+
+    # -----------------------------------------------------------------------
+    # Step 1: Delete KataConfig CR
+    # -----------------------------------------------------------------------
+    - name: Delete KataConfig CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: kataconfiguration.openshift.io/v1
+        kind: KataConfig
+        name: cluster-kataconfig
+        state: absent
+      when: kataconfig_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 2: Wait for KataConfig CR to be fully deleted
+    #         Uses kubernetes.core.k8s_info polling — no oc shell.
+    #         Budget: 60 retries × 60s = 60 minutes
+    # -----------------------------------------------------------------------
+    - name: Wait for KataConfig CR to be fully deleted
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: kataconfiguration.openshift.io/v1
+        kind: KataConfig
+        name: cluster-kataconfig
+      register: kataconfig_gone
+      until: kataconfig_gone.resources | length == 0
+      retries: 60
+      delay: 60
+      when: kataconfig_present | bool
+
+    - name: Assert KataConfig CR is deleted
+      ansible.builtin.assert:
+        that:
+          - kataconfig_gone.resources | length == 0
+        fail_msg: "KataConfig CR was not deleted after 60 minutes"
+        success_msg: "KataConfig CR deleted — OK"
+      when: kataconfig_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 3: Pause for MCP reconciler, then wait master MCP Updated=True
+    #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
+    #         Budget: 30 retries × 60s = 30 minutes
+    # -----------------------------------------------------------------------
+    - name: Pause 90s for master MCP reconciler to process KataConfig removal
+      ansible.builtin.pause:
+        seconds: 90
+      when: kataconfig_present | bool
+
+    - name: Wait for master MachineConfigPool to settle after KataConfig removal
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+        name: master
+      register: mcp_master_kata_wait
+      until: >-
+        (mcp_master_kata_wait.resources | length > 0) and
+        (mcp_master_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updated') |
+          selectattr('status', 'equalto', 'True') | list | length > 0) and
+        (mcp_master_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updating') |
+          selectattr('status', 'equalto', 'False') | list | length > 0) and
+        (mcp_master_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Degraded') |
+          selectattr('status', 'equalto', 'False') | list | length > 0)
+      retries: 30
+      delay: 60
+      when: kataconfig_present | bool
+
+    - name: Display master MCP final conditions after KataConfig removal
+      ansible.builtin.debug:
+        msg: >-
+          {%- set conds = (mcp_master_kata_wait.resources | default([{}]))[0].status.conditions | default([]) -%}
+          {%- set result = [] -%}
+          {%- for c in conds -%}
+            {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
+          {%- endfor -%}
+          master MCP conditions: {{ result | join(', ') }}
+      when: kataconfig_present | bool
+
+    # -----------------------------------------------------------------------
+    # Step 4: Verify kata-cc RuntimeClass is removed
+    #         Uses kubernetes.core.k8s_info — no oc shell.
+    # -----------------------------------------------------------------------
+    - name: Get kata-cc RuntimeClass info (expect absent)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: node.k8s.io/v1
+        kind: RuntimeClass
+        name: kata-cc
+      register: kata_runtimeclass_info
+      when: kataconfig_present | bool
+
+    - name: Assert kata-cc RuntimeClass is removed
+      ansible.builtin.assert:
+        that:
+          - kata_runtimeclass_info.resources | length == 0
+        fail_msg: "kata-cc RuntimeClass still present after KataConfig removal"
+        success_msg: "kata-cc RuntimeClass removed — OK"
+      when: kataconfig_present | bool
+
+    - name: Display KataConfig removal complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "KataConfig removed successfully"
+          - "KataConfig CR  : deleted"
+          - "RuntimeClass   : kata-cc removed"
+          - "Master MCP     : rolled out cleanly"
+          - "=========================================="
+      when: kataconfig_present | bool
+
+    - name: Display KataConfig already absent
+      ansible.builtin.debug:
+        msg: "KataConfig cluster-kataconfig not found — nothing to remove"
+      when: not (kataconfig_present | bool)

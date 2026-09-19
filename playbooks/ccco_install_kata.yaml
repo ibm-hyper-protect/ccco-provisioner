@@ -1,0 +1,24 @@
+---
+# Usage: ansible-playbook playbooks/ccco_install_kata.yaml
+# Applies KataConfig and installs the Kata (kata-se) runtime standalone.
+
+- name: Generate inventory hosts file from all.yaml
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/default/group_vars/all.yaml"
+  tasks:
+    - name: Set inventory
+      ansible.builtin.import_role:
+        name: ccco_setinventory
+
+- name: Create KataConfig and install Kata runtime
+  hosts: bastion
+  gather_facts: false
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all.yaml"
+  tasks:
+    - name: Install Kata runtime
+      ansible.builtin.import_role:
+        name: ccco_install_kata
