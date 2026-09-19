@@ -41,9 +41,21 @@
           - "Artifacts : {{ scripts_dir }}"
           - "=========================================="
 
+    - name: Enable IBM Secure Execution (SE) on cluster nodes
+      ansible.builtin.import_role:
+        name: ccco_enable_se
+
     - name: Install Node Feature Discovery (NFD) Operator
       ansible.builtin.import_role:
         name: ccco_install_nfd
+
+    - name: Install OpenShift Sandboxed Containers (OSC) Operator
+      ansible.builtin.import_role:
+        name: ccco_install_osc
+
+    - name: Create KataConfig and install Kata runtime
+      ansible.builtin.import_role:
+        name: ccco_install_kata
 
     - name: Generate CCCO contract keys and policy
       ansible.builtin.import_role:

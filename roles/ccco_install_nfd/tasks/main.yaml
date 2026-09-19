@@ -2,8 +2,13 @@
 # Role: ccco_install_nfd
 # Purpose: Install the Node Feature Discovery (NFD) Operator on OpenShift,
 #          create the NodeFeatureDiscovery CR to start node labelling, and
-#          apply the IBM Secure Execution NodeFeatureRule so worker nodes
-#          are labelled with feature.node.kubernetes.io/cpu-security.se.enabled.
+#          apply the IBM Secure Execution NodeFeatureRule so all nodes are
+#          labelled with ibm.feature.node.kubernetes.io/se=true.
+#
+# Prerequisite for: ccco_install_kata
+#   The KataConfig reconciler (OSC operator) requires ibm.feature.node.kubernetes.io/se
+#   to be present on all nodes before it can detect the IBM SE TEE platform.
+#   This role waits and asserts that label before completing (Step 9).
 #
 # Steps:
 #   1. Create openshift-nfd Namespace
@@ -11,10 +16,11 @@
 #   3. Create Subscription (catalog source configurable via nfd_source)
 #   4. Wait for CSV to reach Succeeded
 #   5. Create NodeFeatureDiscovery CR
-#   6. Apply IBM SE NodeFeatureRule CR
+#   6. Apply IBM SE NodeFeatureRule CR (sets ibm.feature.node.kubernetes.io/se=true)
 #   7. Wait for NFD worker + master pods to be Running
-#   8. Verify node labels are populated
-#   9. Report IBM SE label presence per worker node
+#   8. Verify generic node labels are populated
+#   9. Wait for ibm.feature.node.kubernetes.io/se=true on all nodes + assert
+#  10. Report IBM SE label per node
 
 - name: Ensure kubernetes Python library is installed on bastion
   ansible.builtin.pip:
@@ -122,14 +128,12 @@
     - name: Display NFD pod statuses
       ansible.builtin.debug:
         msg: >-
-          {%- set result = [] -%}
-          {%- for pod in nfd_pods.resources -%}
-            {%- set _ = result.append(pod.metadata.name ~ ' → ' ~ pod.status.phase) -%}
-          {%- endfor -%}
-          {{ result }}
+          {{ nfd_pods.resources | map(attribute='metadata.name') | list |
+             zip(nfd_pods.resources | map(attribute='status.phase') | list) |
+             map('join', ' → ') | list }}
 
     # -----------------------------------------------------------------------
-    # Step 8: Verify node labels are populated
+    # Step 8: Verify generic NFD node labels are populated
     # -----------------------------------------------------------------------
     - name: Wait for NFD node labels to be present
       kubernetes.core.k8s_info:
@@ -146,20 +150,55 @@
       delay: 30
 
     # -----------------------------------------------------------------------
-    # Step 9: Report IBM SE label per worker node
+    # Step 9: Wait for ibm.feature.node.kubernetes.io/se label on ALL nodes
+    #         The OSC operator (KataConfig reconciler) REQUIRES this label to
+    #         detect the IBM SE TEE platform. Must be present before ccco_install_kata.
+    #         Targets all nodes (not just masters) so non-compact clusters with
+    #         dedicated workers are also covered.
+    #         Strategy: fetch total node count once, then poll labelled nodes
+    #         until counts match — single integer comparison per retry.
+    #         Budget: 20 retries × 30s = 10 minutes
     # -----------------------------------------------------------------------
-    - name: Report SE label per worker node
+    - name: Get total node count
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Node
+      register: all_nodes_se
+
+    - name: Wait for ibm.feature.node.kubernetes.io/se=true on all nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - "ibm.feature.node.kubernetes.io/se=true"
+      register: se_labelled_nodes
+      until: se_labelled_nodes.resources | length == all_nodes_se.resources | length
+      retries: 20
+      delay: 30
+
+    - name: Assert ibm.feature.node.kubernetes.io/se=true present on all nodes
+      ansible.builtin.assert:
+        that:
+          - se_labelled_nodes.resources | length == all_nodes_se.resources | length
+        fail_msg: >-
+          ibm.feature.node.kubernetes.io/se=true not present on all nodes
+          ({{ se_labelled_nodes.resources | length }}/{{ all_nodes_se.resources | length }} labelled).
+          KataConfig will fail to detect TEE platform without this label.
+          Check that ccco_enable_se ran successfully and the NodeFeatureRule ibm-se-rule was applied.
+        success_msg: >-
+          ibm.feature.node.kubernetes.io/se=true present on all
+          {{ all_nodes_se.resources | length }} nodes — OK
+
+    # -----------------------------------------------------------------------
+    # Step 10: Report IBM SE label per node
+    # -----------------------------------------------------------------------
+    - name: Report SE label per node
       ansible.builtin.debug:
         msg: >-
-          {%- set result = [] -%}
-          {%- for node in nfd_nodes.resources -%}
-            {%- set labels = node.metadata.labels | default({}) -%}
-            {%- if 'node-role.kubernetes.io/worker' in labels -%}
-              {%- set se = 'feature.node.kubernetes.io/cpu-security.se.enabled' in labels -%}
-              {%- set _ = result.append(node.metadata.name ~ '  se_label=' ~ se) -%}
-            {%- endif -%}
-          {%- endfor -%}
-          {{ result }}
+          {{ se_labelled_nodes.resources | map(attribute='metadata.name') |
+             map('regex_replace', '$', '  ibm.feature.node.kubernetes.io/se=true') | list }}
 
     - name: Display NFD installation complete
       ansible.builtin.debug:
@@ -168,4 +207,5 @@
           - "NFD Operator installed successfully"
           - "Namespace : openshift-nfd"
           - "Source    : {{ nfd_source }}"
+          - "ibm SE label verified on all nodes"
           - "=========================================="

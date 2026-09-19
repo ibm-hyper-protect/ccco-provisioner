@@ -1,0 +1,59 @@
+---
+# Usage: ansible-playbook playbooks/ccco_cleanup.yaml
+# Reverse of ccco_baremetal.yaml — tears down the full CCCO stack in order:
+#   Workload → Kata → OSC → NFD → SE
+# All cleanup roles are idempotent: safe to run even if a step was never installed.
+#
+# WARNING: SE removal (ccco_remove_se) deletes MachineConfigs and triggers
+#          MCO node reboots. Run this only when the cluster is fully idle.
+
+- name: Generate inventory hosts file from all.yaml
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/default/group_vars/all.yaml"
+  tasks:
+    - name: Set inventory
+      ansible.builtin.import_role:
+        name: ccco_setinventory
+
+- name: Remove CCCO stack (Kata → OSC → NFD → SE)
+  hosts: bastion
+  gather_facts: false
+  vars:
+    scripts_dir: "/root/ccco-artifacts"
+    ccco_namespace: "default"
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all.yaml"
+  tasks:
+    - name: Display cleanup start
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "CCCO Baremetal Cleanup"
+          - "=========================================="
+          - "Host      : {{ inventory_hostname }}"
+          - "Namespace : {{ ccco_namespace }}"
+          - "Artifacts : {{ scripts_dir }}"
+          - "=========================================="
+
+    - name: Remove PayNow workload, Secrets and generated files
+      ansible.builtin.import_role:
+        name: ccco_remove_workload
+
+    - name: Remove KataConfig and Kata runtime
+      ansible.builtin.import_role:
+        name: ccco_remove_kata
+
+    - name: Remove OpenShift Sandboxed Containers (OSC) Operator
+      ansible.builtin.import_role:
+        name: ccco_remove_osc
+
+    - name: Remove Node Feature Discovery (NFD) Operator
+      ansible.builtin.import_role:
+        name: ccco_remove_nfd
+
+    - name: Remove IBM Secure Execution (SE) MachineConfigs
+      ansible.builtin.import_role:
+        name: ccco_remove_se

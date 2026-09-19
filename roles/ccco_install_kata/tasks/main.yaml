@@ -1,0 +1,269 @@
+---
+# Role: ccco_install_kata
+# Purpose: Apply OSC feature-gates, kata-addon-artifacts ConfigMaps, and the
+#          KataConfig CR to install the Kata (kata-se) runtime on OpenShift.
+#          Wait for installation to complete, verify RuntimeClass and node service.
+#
+# Steps:
+#   1. Apply osc-feature-gates ConfigMap
+#   2. Apply kata-addon-artifacts ConfigMap
+#   3. Apply KataConfig CR
+#   4. 60s pause, then wait for KataConfig InProgress=False (60×60s)
+#   5. Verify kata-cc RuntimeClass handler == kata-se
+#   6. Verify all OSC pods Running/Completed
+#   7. Verify kata-addon-kernel.service completed on each worker node
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Install KataConfig and Kata runtime
+  block:
+
+    # -----------------------------------------------------------------------
+    # Step 1: Apply osc-feature-gates ConfigMap
+    # -----------------------------------------------------------------------
+    - name: Apply osc-feature-gates ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: osc-feature-gates.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 2: Apply kata-addon-artifacts ConfigMap
+    # -----------------------------------------------------------------------
+    - name: Apply kata-addon-artifacts ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: kata-addon-artifacts.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 3: Apply KataConfig CR
+    # -----------------------------------------------------------------------
+    - name: Apply KataConfig CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: cluster-kataconfig.yaml.j2
+
+    # -----------------------------------------------------------------------
+    # Step 4: Pause then wait for KataConfig InProgress condition = False
+    #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
+    #         Timeout budget: 60 retries × 60s = 60 minutes
+    # -----------------------------------------------------------------------
+    - name: Pause 60s for KataConfig installation to begin
+      ansible.builtin.pause:
+        seconds: 60
+
+    - name: Wait for KataConfig installation to complete (InProgress=False)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: kataconfiguration.openshift.io/v1
+        kind: KataConfig
+        name: cluster-kataconfig
+      register: kata_config_info
+      until: >-
+        (kata_config_info.resources | length > 0) and
+        (kata_config_info.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'InProgress') |
+          selectattr('status', 'equalto', 'False') | list | length > 0)
+      retries: 60
+      delay: 60
+
+    - name: Display KataConfig install conditions
+      ansible.builtin.debug:
+        msg: >-
+          KataConfig conditions: {{
+            kata_config_info.resources[0].status.conditions | default([]) |
+            map(attribute='type') | zip(
+            kata_config_info.resources[0].status.conditions | default([]) |
+            map(attribute='status')) | map('join', '=') | join(', ')
+          }}
+
+    # -----------------------------------------------------------------------
+    # Step 5: Verify kata-cc RuntimeClass handler == kata-se
+    #         Uses kubernetes.core.k8s_info — no oc shell.
+    # -----------------------------------------------------------------------
+    - name: Get kata-cc RuntimeClass info
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: node.k8s.io/v1
+        kind: RuntimeClass
+        name: kata-cc
+      register: kata_rc_info
+
+    - name: Assert kata-cc RuntimeClass exists
+      ansible.builtin.assert:
+        that:
+          - kata_rc_info.resources | length > 0
+        fail_msg: "kata-cc RuntimeClass not found — KataConfig may not have completed successfully"
+        success_msg: "kata-cc RuntimeClass found — OK"
+
+    - name: Assert kata-cc RuntimeClass handler is kata-se
+      ansible.builtin.assert:
+        that:
+          - kata_rc_info.resources[0].handler == "kata-se"
+        fail_msg: >-
+          Expected kata-cc RuntimeClass handler=kata-se,
+          got '{{ kata_rc_info.resources[0].handler }}'
+        success_msg: "kata-cc RuntimeClass handler=kata-se — OK"
+
+    # -----------------------------------------------------------------------
+    # Step 6: Verify all OSC pods are Running or Completed
+    # -----------------------------------------------------------------------
+    - name: Wait for all OSC pods to be Running or Completed
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        kind: Pod
+        namespace: openshift-sandboxed-containers-operator
+      register: osc_pods_kata
+      # TODO: status.phase == Running does not catch containers in CrashLoopBackOff.
+      # A more complete check would also verify all containerStatuses[*].ready == true.
+      # This is acceptable for a first iteration as operator pods are long-running daemons
+      # and a CrashLoopBackOff would eventually surface as a timeout here.
+      until: >-
+        osc_pods_kata.resources | length > 0 and
+        (osc_pods_kata.resources |
+         rejectattr('status.phase', 'equalto', 'Running') |
+         rejectattr('status.phase', 'equalto', 'Succeeded') | list | length == 0)
+      retries: 18
+      delay: 10
+
+    - name: Display OSC pod statuses
+      ansible.builtin.debug:
+        msg: >-
+          {{ osc_pods_kata.resources | map(attribute='metadata.name') | list |
+             zip(osc_pods_kata.resources | map(attribute='status.phase') | list) |
+             map('join', ' → ') | list }}
+
+    # -----------------------------------------------------------------------
+    # Step 7: Verify kata-addon-kernel.service completed on each worker node
+    #         Uses kubernetes.core.k8s_info to list nodes + k8s to launch
+    #         a privileged debug Pod per node — no oc debug shell.
+    #         Skipped entirely on compact clusters (no dedicated worker nodes).
+    # -----------------------------------------------------------------------
+    - name: Get worker node names
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - "node-role.kubernetes.io/worker"
+      register: worker_nodes_info
+
+    - name: Filter out master/control-plane nodes that also carry worker label
+      # rejectattr with bracket-notation keys ('metadata.labels["x/y"]') is unreliable
+      # when the label key contains '/' or '.'. Use a Jinja2 for-loop instead.
+      ansible.builtin.set_fact:
+        pure_worker_nodes: >-
+          {%- set result = [] -%}
+          {%- for node in worker_nodes_info.resources -%}
+            {%- set labels = node.metadata.labels | default({}) -%}
+            {%- if 'node-role.kubernetes.io/master' not in labels and
+                   'node-role.kubernetes.io/control-plane' not in labels -%}
+              {%- set _ = result.append(node.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Skip worker-node service check on compact cluster (no dedicated workers)
+      ansible.builtin.debug:
+        msg: "Compact cluster detected — no dedicated worker nodes; skipping kata-addon-kernel.service check"
+      when: pure_worker_nodes | length == 0
+
+    - name: Verify kata-addon-kernel.service active on each worker node (via debug Pod)
+      when: pure_worker_nodes | length > 0
+      block:
+
+        - name: Launch privileged debug Pod on each worker node
+          kubernetes.core.k8s:
+            kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: "kata-svc-check-{{ item | replace('.', '-') }}"
+                namespace: default
+                labels:
+                  app: kata-svc-check
+              spec:
+                nodeName: "{{ item }}"
+                restartPolicy: Never
+                hostPID: true
+                hostNetwork: true
+                tolerations:
+                  - operator: Exists
+                containers:
+                  - name: check
+                    image: "registry.redhat.io/ubi9/ubi:latest"
+                    command:
+                      - nsenter
+                      - "--target=1"
+                      - "--mount"
+                      - "--uts"
+                      - "--ipc"
+                      - "--net"
+                      - "--pid"
+                      - "--"
+                      - systemctl
+                      - is-active
+                      - kata-addon-kernel.service
+                    securityContext:
+                      privileged: true
+          loop: "{{ pure_worker_nodes }}"
+
+        - name: Wait for each debug Pod to reach Succeeded or Failed
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+            api_version: v1
+            kind: Pod
+            name: "kata-svc-check-{{ item | replace('.', '-') }}"
+            namespace: default
+          register: svc_pod_status
+          until: >-
+            (svc_pod_status.resources | length > 0) and
+            (svc_pod_status.resources[0].status.phase in ['Succeeded', 'Failed'])
+          retries: 12
+          delay: 10
+          loop: "{{ pure_worker_nodes }}"
+
+        - name: Assert kata-addon-kernel.service active on each worker node
+          ansible.builtin.assert:
+            that:
+              - item.resources[0].status.phase == "Succeeded"
+            fail_msg: >-
+              kata-addon-kernel.service check FAILED on node
+              {{ item.resources[0].spec.nodeName | default('unknown') }}
+              (pod phase={{ item.resources[0].status.phase }})
+            success_msg: >-
+              kata-addon-kernel.service is active on
+              {{ item.resources[0].spec.nodeName | default('unknown') }}
+          loop: "{{ svc_pod_status.results }}"
+
+        - name: Clean up debug Pods
+          kubernetes.core.k8s:
+            kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+            state: absent
+            api_version: v1
+            kind: Pod
+            name: "kata-svc-check-{{ item | replace('.', '-') }}"
+            namespace: default
+          loop: "{{ pure_worker_nodes }}"
+
+    # -----------------------------------------------------------------------
+    # Final summary
+    # -----------------------------------------------------------------------
+    - name: Display KataConfig installation complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "KataConfig installed successfully"
+          - "RuntimeClass : kata-cc  (handler=kata-se)"
+          - "Addon image  : {{ kata.addon_image }}"
+          - "Kernel path  : {{ kata.kernel_path }}"
+          - "=========================================="

@@ -1,0 +1,225 @@
+---
+# Role: ccco_remove_nfd
+# Purpose: Idempotent NFD uninstall. Checks Subscription exists first; skips
+#          gracefully if NFD is not installed. Also strips all
+#          feature.node.kubernetes.io/* labels from every node after removal.
+#
+# Steps:
+#   Guard: k8s_info → Subscription nfd in openshift-nfd → set nfd_installed_csv
+#          (empty string = skip all steps)
+#   1. Delete IBM SE NodeFeatureRule CR (ibm-se-rule) — ignore_errors
+#   2. Check NodeFeatureDiscovery CR exists → remove finalizer → delete CR
+#   3. Delete Subscription nfd
+#   4. Delete CSV by exact name (nfd_installed_csv)
+#   5. Delete OperatorGroup nfd-operator-group — ignore_errors
+#   6. Delete Namespace openshift-nfd → wait NS fully gone (18×10s)
+#   7. Get all nodes → oc label each node to remove feature.node.kubernetes.io/* labels
+#      Verify label count == 0
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Remove Node Feature Discovery (NFD) Operator
+  block:
+
+    # -----------------------------------------------------------------------
+    # Guard: check whether NFD Subscription exists
+    # -----------------------------------------------------------------------
+    - name: Check if NFD Subscription exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: nfd
+        namespace: openshift-nfd
+      register: nfd_subscription_info
+
+    - name: Set nfd_installed_csv fact
+      ansible.builtin.set_fact:
+        nfd_installed_csv: >-
+          {{ nfd_subscription_info.resources | map(attribute='status.installedCSV')
+             | select | first | default('') }}
+
+    - name: Display NFD installation status
+      ansible.builtin.debug:
+        msg: >-
+          NFD Subscription {{ 'found — CSV: ' ~ nfd_installed_csv
+          if nfd_installed_csv != '' else 'not found — skipping removal' }}
+
+    # -----------------------------------------------------------------------
+    # Step 1: Delete IBM SE NodeFeatureRule CR
+    # -----------------------------------------------------------------------
+    - name: Delete IBM SE NodeFeatureRule CR (ibm-se-rule)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: nfd.k8s-sigs.io/v1alpha1
+        kind: NodeFeatureRule
+        name: ibm-se-rule
+        namespace: openshift-nfd
+        state: absent
+      ignore_errors: true
+      when: nfd_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 2: Remove finalizer from NodeFeatureDiscovery CR then delete it
+    # -----------------------------------------------------------------------
+    - name: Check NodeFeatureDiscovery CR exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: nfd.openshift.io/v1
+        kind: NodeFeatureDiscovery
+        namespace: openshift-nfd
+      register: nfd_cr_info
+      when: nfd_installed_csv != ""
+
+    - name: Remove finalizers from NodeFeatureDiscovery CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: nfd.openshift.io/v1
+        kind: NodeFeatureDiscovery
+        name: "{{ nfd_cr_info.resources[0].metadata.name }}"
+        namespace: openshift-nfd
+        merge_type: merge
+        definition:
+          metadata:
+            finalizers: []
+      when:
+        - nfd_installed_csv != ""
+        - nfd_cr_info.resources | length > 0
+
+    - name: Delete NodeFeatureDiscovery CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: nfd.openshift.io/v1
+        kind: NodeFeatureDiscovery
+        name: "{{ nfd_cr_info.resources[0].metadata.name }}"
+        namespace: openshift-nfd
+        state: absent
+      when:
+        - nfd_installed_csv != ""
+        - nfd_cr_info.resources | length > 0
+
+    - name: Wait for NodeFeatureDiscovery CR to be fully gone (finalizer cleared)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: nfd.openshift.io/v1
+        kind: NodeFeatureDiscovery
+        namespace: openshift-nfd
+      register: nfd_cr_gone
+      until: nfd_cr_gone.resources | length == 0
+      retries: 18
+      delay: 10
+      when:
+        - nfd_installed_csv != ""
+        - nfd_cr_info.resources | length > 0
+
+    # -----------------------------------------------------------------------
+    # Step 3: Delete NFD Subscription
+    # -----------------------------------------------------------------------
+    - name: Delete NFD Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: nfd
+        namespace: openshift-nfd
+        state: absent
+      when: nfd_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 4: Delete CSV by exact name
+    # -----------------------------------------------------------------------
+    - name: Delete NFD ClusterServiceVersion
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ nfd_installed_csv }}"
+        namespace: openshift-nfd
+        state: absent
+      when: nfd_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 5: Delete OperatorGroup
+    # -----------------------------------------------------------------------
+    - name: Delete NFD OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: nfd-operator-group
+        namespace: openshift-nfd
+        state: absent
+      ignore_errors: true
+      when: nfd_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 6: Delete Namespace and wait until fully gone
+    # -----------------------------------------------------------------------
+    - name: Delete openshift-nfd Namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Namespace
+        name: openshift-nfd
+        state: absent
+      when: nfd_installed_csv != ""
+
+    - name: Wait for openshift-nfd Namespace to be fully deleted
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Namespace
+        name: openshift-nfd
+      register: nfd_ns_check
+      until: nfd_ns_check.resources | length == 0
+      retries: 36
+      delay: 10
+      when: nfd_installed_csv != ""
+
+    # -----------------------------------------------------------------------
+    # Step 7: Strip all feature.node.kubernetes.io/* and ibm.feature.node.kubernetes.io/*
+    #         labels from every node using a Jinja2 template.
+    #         The template renders one Node patch doc per node with literal
+    #         YAML null (~) for each NFD label key — strategic-merge-patch
+    #         removes any label key whose value is null.
+    # -----------------------------------------------------------------------
+    - name: Get all nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Node
+      register: all_nodes_nfd
+      when: nfd_installed_csv != ""
+
+    - name: Remove NFD labels from each node via template patch
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        state: present
+        template: node-remove-nfd-labels.yaml.j2
+      loop: "{{ all_nodes_nfd.resources | default([]) }}"
+      loop_control:
+        loop_var: nfd_node
+      when:
+        - nfd_installed_csv != ""
+        - nfd_node.metadata.labels | default({}) | dict2items |
+          selectattr('key', 'match', '^(feature|ibm)\\.node\\.kubernetes\\.io') |
+          list | length > 0
+
+    - name: Display NFD removal complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "NFD Operator removed successfully"
+          - "Namespace openshift-nfd : deleted"
+          - "Node NFD labels         : stripped"
+          - "=========================================="
+      when: nfd_installed_csv != ""
+
+    - name: Display NFD already absent
+      ansible.builtin.debug:
+        msg: "NFD Subscription not found — nothing to remove"
+      when: nfd_installed_csv == ""

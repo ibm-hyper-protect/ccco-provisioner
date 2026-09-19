@@ -1,0 +1,108 @@
+---
+# Role: ccco_remove_workload
+# Purpose: Remove all cluster objects and generated files created by
+#          ccco_paynow_deploy, ccco_sealed_secrets, and ccco_contract_generator.
+#
+# Cluster objects removed (in order — pod first, then secrets):
+#   - Pod     paynow-ssl      in {{ ccco_namespace }}
+#   - Service paynow-ssl      in {{ ccco_namespace }}
+#   - Secret  spoiler         in {{ ccco_namespace }}
+#   - Secret  sealed-paynow   in {{ ccco_namespace }}
+#
+# Generated files wiped from {{ scripts_dir }} on bastion:
+#   contract artefacts, keys, sealed tokens, manifests, copied artifacts
+#
+# All steps are idempotent — safe to run when nothing is deployed.
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Remove PayNow workload and generated files
+  block:
+
+    # -----------------------------------------------------------------------
+    # Step 1: Delete PayNow Pod
+    # -----------------------------------------------------------------------
+    - name: Delete paynow-ssl Pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Pod
+        name: paynow-ssl
+        namespace: "{{ ccco_namespace }}"
+        state: absent
+
+    - name: Wait for paynow-ssl Pod to be fully deleted
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Pod
+        name: paynow-ssl
+        namespace: "{{ ccco_namespace }}"
+      register: paynow_pod_check
+      until: paynow_pod_check.resources | length == 0
+      retries: 18
+      delay: 10
+
+    # -----------------------------------------------------------------------
+    # Step 2: Delete PayNow Service
+    # -----------------------------------------------------------------------
+    - name: Delete paynow-ssl Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Service
+        name: paynow-ssl
+        namespace: "{{ ccco_namespace }}"
+        state: absent
+
+    # -----------------------------------------------------------------------
+    # Step 3: Delete Secrets
+    # -----------------------------------------------------------------------
+    - name: Delete spoiler Secret
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Secret
+        name: spoiler
+        namespace: "{{ ccco_namespace }}"
+        state: absent
+
+    - name: Delete sealed-paynow Secret
+      kubernetes.core.k8s:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Secret
+        name: sealed-paynow
+        namespace: "{{ ccco_namespace }}"
+        state: absent
+
+    - name: Display cluster object removal complete
+      ansible.builtin.debug:
+        msg:
+          - "Cluster objects removed from namespace: {{ ccco_namespace }}"
+          - "  Pod     paynow-ssl    : deleted"
+          - "  Service paynow-ssl    : deleted"
+          - "  Secret  spoiler       : deleted"
+          - "  Secret  sealed-paynow : deleted"
+
+    # -----------------------------------------------------------------------
+    # Step 4: Remove the entire scripts_dir directory from bastion
+    # Deletes the directory and all contents in one shot — cleaner than
+    # listing individual files and handles any unexpected leftovers.
+    # -----------------------------------------------------------------------
+    - name: Remove scripts_dir directory entirely
+      ansible.builtin.file:
+        path: "{{ scripts_dir }}"
+        state: absent
+
+    - name: Display removal complete
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "PayNow workload and generated files removed"
+          - "scripts_dir : {{ scripts_dir }} — deleted"
+          - "=========================================="

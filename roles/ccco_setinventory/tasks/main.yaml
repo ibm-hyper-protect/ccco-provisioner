@@ -21,7 +21,7 @@
     force: yes
 
 - name: Verify inventory is valid
-  ansible.builtin.command: ansible-inventory --list
+  ansible.builtin.command: ansible-inventory -i {{ hosts_file_path }} --list
   register: inv_check
   failed_when: inv_check.rc != 0
 

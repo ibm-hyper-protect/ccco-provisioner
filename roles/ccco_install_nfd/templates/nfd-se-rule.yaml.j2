@@ -7,7 +7,7 @@ spec:
   rules:
     - name: "ibm.se.enabled"
       labels:
-        feature.node.kubernetes.io/cpu-security.se.enabled: "true"
+        ibm.feature.node.kubernetes.io/se: "true"
       matchFeatures:
         - feature: cpu.security
           matchExpressions:
