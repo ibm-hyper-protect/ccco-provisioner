@@ -32,15 +32,22 @@
       register: all_nodes_info
 
     - name: Set worker_node_count fact (worker role but NOT master)
+      # rejectattr/selectattr with bracket-notation keys ('metadata.labels["x/y"]')
+      # is unreliable when keys contain '/' or '.'. Use a Jinja2 for-loop instead.
+      # On compact clusters all nodes carry both master+worker labels — the for-loop
+      # correctly excludes them, giving worker_node_count=0.
       ansible.builtin.set_fact:
         worker_node_count: >-
-          {{
-            all_nodes_info.resources |
-            selectattr('metadata.labels', 'defined') |
-            selectattr('metadata.labels["node-role.kubernetes.io/worker"]', 'defined') |
-            rejectattr('metadata.labels["node-role.kubernetes.io/master"]', 'defined') |
-            list | length
-          }}
+          {%- set result = [] -%}
+          {%- for node in all_nodes_info.resources -%}
+            {%- set labels = node.metadata.labels | default({}) -%}
+            {%- if 'node-role.kubernetes.io/worker' in labels and
+                   'node-role.kubernetes.io/master' not in labels and
+                   'node-role.kubernetes.io/control-plane' not in labels -%}
+              {%- set _ = result.append(node.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result | length }}
 
     - name: Display node counts
       ansible.builtin.debug:
@@ -135,6 +142,7 @@
     - name: Display worker MCP rollout status
       ansible.builtin.debug:
         msg: "Worker MCP rollout complete — Updated=True, Updating=False, Degraded=False"
+        verbosity: 1
       when: worker_node_count | int > 0
 
     # -----------------------------------------------------------------------
@@ -159,6 +167,7 @@
             {%- set _ = result.append(node.metadata.name ~ '  ibm.feature.node.kubernetes.io/se=' ~ se) -%}
           {%- endfor -%}
           {{ result }}
+        verbosity: 1
 
     - name: Display SE enablement complete
       ansible.builtin.debug:
