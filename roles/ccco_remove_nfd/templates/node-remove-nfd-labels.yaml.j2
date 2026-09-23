@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Node
 metadata:
-  name: {{ nfd_node.metadata.name }}
+  name: "{{ nfd_node.metadata.name }}"
   labels:
 {% for key in nfd_node.metadata.labels | default({}) | dict2items
        | selectattr('key', 'match', '^(feature|ibm)\.node\.kubernetes\.io')
