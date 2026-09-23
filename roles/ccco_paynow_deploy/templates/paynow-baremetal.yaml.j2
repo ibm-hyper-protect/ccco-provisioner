@@ -4,12 +4,12 @@ metadata:
   labels:
     app: paynow-ssl
   name: paynow-ssl
-  namespace: {{ ccco_namespace }}
+  namespace: "{{ ccco_namespace }}"
   annotations:
     io.katacontainers.config.hypervisor.default_vcpus: "3"
     io.katacontainers.config.hypervisor.default_memory: "9216"
     io.katacontainers.config.runtime.create_container_timeout: "900"
-    io.katacontainers.config.hypervisor.cc_init_data: {{ initdata_content.content | b64decode | trim }}
+    io.katacontainers.config.hypervisor.cc_init_data: "{{ initdata_content.content | b64decode | trim }}"
 spec:
   runtimeClassName: kata-cc
   containers:
@@ -42,7 +42,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: paynow-ssl
-  namespace: {{ ccco_namespace }}
+  namespace: "{{ ccco_namespace }}"
 spec:
   type: NodePort
   selector:
