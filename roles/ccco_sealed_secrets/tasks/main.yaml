@@ -120,3 +120,4 @@
     msg:
       - "Sealed secret 'spoiler' created in namespace {{ ccco_namespace }}"
       - "Sealed secret 'sealed-paynow' (CERT + KEY) created in namespace {{ ccco_namespace }}"
+    verbosity: 1

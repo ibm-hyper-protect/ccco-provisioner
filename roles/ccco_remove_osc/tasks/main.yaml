@@ -45,6 +45,7 @@
         msg: >-
           OSC Subscription {{ 'found — CSV: ' ~ osc_installed_csv
           if osc_installed_csv != '' else 'not found — skipping removal' }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 1: Delete Subscription

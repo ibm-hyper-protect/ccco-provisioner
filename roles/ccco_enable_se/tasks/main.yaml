@@ -54,6 +54,7 @@
         msg:
           - "Total nodes       : {{ all_nodes_info.resources | length }}"
           - "Worker-only nodes : {{ worker_node_count }}"
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 2: Apply MachineConfig for master nodes
@@ -111,6 +112,7 @@
     - name: Display master MCP rollout status
       ansible.builtin.debug:
         msg: "Master MCP rollout complete — Updated=True, Updating=False, Degraded=False"
+        verbosity: 1
 
     - name: Pause 90s for worker MCP reconciler to start
       ansible.builtin.pause:

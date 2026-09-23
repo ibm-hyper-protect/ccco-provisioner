@@ -81,8 +81,8 @@
             kata_config_info.resources[0].status.conditions | default([]) |
             map(attribute='type') | zip(
             kata_config_info.resources[0].status.conditions | default([]) |
-            map(attribute='status')) | map('join', '=') | join(', ')
-          }}
+            map(attribute='status')) | map('join', '=') | join(', ') }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 5: Verify kata-cc RuntimeClass handler == kata-se
@@ -139,6 +139,7 @@
           {{ osc_pods_kata.resources | map(attribute='metadata.name') | list |
              zip(osc_pods_kata.resources | map(attribute='status.phase') | list) |
              map('join', ' → ') | list }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 7: Verify kata-addon-kernel.service completed on each worker node
@@ -173,6 +174,7 @@
     - name: Skip worker-node service check on compact cluster (no dedicated workers)
       ansible.builtin.debug:
         msg: "Compact cluster detected — no dedicated worker nodes; skipping kata-addon-kernel.service check"
+        verbosity: 1
       when: pure_worker_nodes | length == 0
 
     - name: Verify kata-addon-kernel.service active on each worker node (via debug Pod)

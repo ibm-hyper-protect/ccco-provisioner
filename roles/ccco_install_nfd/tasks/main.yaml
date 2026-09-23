@@ -85,6 +85,7 @@
             selectattr('status.phase', 'equalto', 'Succeeded') |
             map(attribute='metadata.name') | list
           }} reached Succeeded
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 5: Create NodeFeatureDiscovery CR
@@ -131,6 +132,7 @@
           {{ nfd_pods.resources | map(attribute='metadata.name') | list |
              zip(nfd_pods.resources | map(attribute='status.phase') | list) |
              map('join', ' → ') | list }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 8: Verify generic NFD node labels are populated
@@ -199,6 +201,7 @@
         msg: >-
           {{ se_labelled_nodes.resources | map(attribute='metadata.name') |
              map('regex_replace', '$', '  ibm.feature.node.kubernetes.io/se=true') | list }}
+        verbosity: 1
 
     - name: Display NFD installation complete
       ansible.builtin.debug:

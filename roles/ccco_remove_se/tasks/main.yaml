@@ -59,6 +59,7 @@
         msg:
           - "99-master-enable-secure-execution : {{ 'present' if mc_master_present | bool else 'absent' }}"
           - "99-worker-enable-secure-execution : {{ 'present' if mc_worker_present | bool else 'absent' }}"
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 1: Delete master SE MachineConfig
@@ -128,6 +129,7 @@
             {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
           {%- endfor -%}
           master MCP conditions: {{ result | join(', ') }}
+        verbosity: 1
       when: mc_master_present | bool
 
     # -----------------------------------------------------------------------
@@ -174,6 +176,7 @@
             {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
           {%- endfor -%}
           worker MCP conditions: {{ result | join(', ') }}
+        verbosity: 1
       when: mc_worker_present | bool
 
     - name: Display SE removal complete
