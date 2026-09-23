@@ -48,6 +48,7 @@
         msg: >-
           NFD Subscription {{ 'found — CSV: ' ~ nfd_installed_csv
           if nfd_installed_csv != '' else 'not found — skipping removal' }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 1: Delete IBM SE NodeFeatureRule CR

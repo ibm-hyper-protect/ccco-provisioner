@@ -148,6 +148,7 @@
             selectattr('status.phase', 'equalto', 'Succeeded') |
             map(attribute='metadata.name') | list
           }} reached Succeeded
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 6: Wait for OSC pods to be Running
@@ -172,6 +173,7 @@
           {{ osc_pods.resources | map(attribute='metadata.name') | list |
              zip(osc_pods.resources | map(attribute='status.phase') | list) |
              map('join', ' → ') | list }}
+        verbosity: 1
 
     - name: Display OSC installation complete
       ansible.builtin.debug:

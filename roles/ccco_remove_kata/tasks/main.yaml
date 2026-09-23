@@ -42,6 +42,7 @@
           KataConfig cluster-kataconfig {{ 'found — proceeding with removal'
           if kataconfig_present | bool
           else 'not found — skipping removal' }}
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 1: Delete KataConfig CR
@@ -124,6 +125,7 @@
             {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
           {%- endfor -%}
           master MCP conditions: {{ result | join(', ') }}
+        verbosity: 1
       when: kataconfig_present | bool
 
     # -----------------------------------------------------------------------

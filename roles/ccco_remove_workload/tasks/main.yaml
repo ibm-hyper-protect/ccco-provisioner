@@ -88,6 +88,7 @@
           - "  Service paynow-ssl    : deleted"
           - "  Secret  spoiler       : deleted"
           - "  Secret  sealed-paynow : deleted"
+        verbosity: 1
 
     # -----------------------------------------------------------------------
     # Step 4: Remove the entire scripts_dir directory from bastion
