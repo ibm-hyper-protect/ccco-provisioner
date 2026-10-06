@@ -1,6 +1,6 @@
 # ccco-provisioner
 
-Ansible automation to generate a CCCO contract and deploy the **PayNow** workload on a bare metal OpenShift cluster using IBM Confidential Computing Containers for Red Hat OpenShift Container Platform (CCCO).
+Ansible automation to generate a CCCO contract and deploy workloads (**PayNow** and **Busybox**) on a bare metal OpenShift cluster using IBM Confidential Computing Containers for Red Hat OpenShift Container Platform (CCCO).
 
 
 ## Prerequisites
@@ -62,13 +62,15 @@ cp /path/to/your/artifacts/* artifacts/
 ansible-playbook playbooks/ccco_baremetal.yaml
 ```
 
+
 This will:
 1. Auto-generate `inventories/default/hosts` from `all.yaml` (no manual hosts file needed)
-2. Copy baremetal artifacts to `/root/ccco-artifacts` on the bastion
-3. Generate CCCO contract keys and REGO attestation policy
-4. Create and apply the sealed secret (`spoiler`) to the `default` namespace
-5. Build the encrypted contract (workload + env sections)
-6. Generate `paynow-baremetal.yaml` — the PayNow Pod/Service/Route manifest
+2. Enable IBM Secure Execution and configure NFD, OSC, and Kata runtime
+3. Copy baremetal artifacts to `/root/ccco-artifacts` on the bastion
+4. Generate CCCO contract keys and REGO policy
+5. Create and apply the sealed secret (`spoiler`) to the `default` namespace
+6. Build the encrypted contract (workload + env sections)
+7. Generate the pod manifest and deploy instructions
 
 
 ## Directory structure
@@ -83,12 +85,14 @@ ccco-provisioner/
 │       └── group_vars/
 │           └── all.yaml.template           # Copy to all.yaml and fill values
 ├── playbooks/
-│   └── ccco_baremetal.yaml                 # Single entry-point playbook
+│   ├── ccco_baremetal.yaml                 # PayNow deployment playbook
+│   └── ccco_busybox_deploy.yaml            # Busybox deployment playbook
 └── roles/
     ├── ccco_setinventory/                  # Auto-generates hosts file from all.yaml
     ├── ccco_contract_generator/            # Discovers artifacts, generates REGO policy + keys
     ├── ccco_sealed_secrets/                # Creates and applies sealed secret to cluster
-    └── ccco_paynow_deploy/                 # Builds encrypted contract, generates paynow-baremetal.yaml
+    ├── ccco_paynow_deploy/                 # Builds encrypted contract, generates paynow-baremetal.yaml
+    └── ccco_busybox_deploy/                # Builds encrypted contract, generates busybox-baremetal.yaml
 ```
 
 
