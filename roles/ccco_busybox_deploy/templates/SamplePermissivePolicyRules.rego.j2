@@ -1,0 +1,83 @@
+# Copyright (c) 2024 Microsoft Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+package agent_policy
+
+default CheckRequest := true
+default CreateSandboxRequest := true
+default DestroySandboxRequest := true
+default CreateContainerRequest := false
+CreateContainerRequest if {
+  allow_image(input.OCI.Annotations["io.kubernetes.cri-o.ImageName"])
+}
+allow_image(image_name) if {
+  regex.match("quay\\.io/openshift-release-dev/ocp-v4\\.0-art-dev@sha256:[a-f0-9]{64}", image_name)
+}
+allow_image(image_name) if {
+  regex.match(".*busybox.*", image_name)
+}
+default StartContainerRequest := false
+StartContainerRequest if {
+  allow_container_id(input.container_id)
+}
+default RemoveContainerRequest := false
+RemoveContainerRequest if {
+  allow_container_id(input.container_id)
+}
+default PauseContainerRequest := false
+default ResumeContainerRequest := false
+default UpdateContainerRequest := false
+default StatsContainerRequest := true
+default UpdateEphemeralMountsRequest := true
+default RemoveStaleVirtiofsShareMountsRequest := false
+
+# container_id must be a 64-character lowercase hex string
+allow_container_id(container_id) if {
+  regex.match("^[a-f0-9]{64}$", container_id)
+}
+default ExecProcessRequest := false
+default SignalProcessRequest := true
+default WaitProcessRequest := false
+default WriteStreamRequest := false
+default ReadStreamRequest := true
+default CloseStdinRequest := false
+default TtyWinResizeRequest := false
+default CopyFileRequest := false
+CopyFileRequest if {
+  allow_path(input.path)
+  dir_mode := bits.lsh(1, 31)
+  allowed_dir_permission := bits.or(dir_mode, 488)
+  input.dir_mode == allowed_dir_permission
+}
+
+allow_path(path) if {
+  regex.match("/run/kata-containers/shared/containers/[[:xdigit:]]+", path)
+}
+default UpdateInterfaceRequest := true
+default UpdateRoutesRequest := true
+default ListInterfacesRequest := false
+default ListRoutesRequest := false
+default AddARPNeighborsRequest := false
+default GetIPTablesRequest := false
+default SetIPTablesRequest := false
+default GuestDetailsRequest := false
+GuestDetailsRequest if {
+  input.mem_block_size == true
+  input.mem_hotplug_probe == true
+}
+default OnlineCPUMemRequest := true
+default MemHotplugByProbeRequest := false
+default ReseedRandomDevRequest := false
+default SetGuestDateTimeRequest := false
+default GetOOMEventRequest := true
+default AddSwapRequest := false
+default AddSwapPathRequest := false
+default MemAgentCompactConfig := false
+default MemAgentMemcgConfig := false
+default VolumeStatsRequest := false
+default ResizeVolumeRequest := false
+default GetMetricsRequest := true
+default GetDiagnosticDataRequest := false
+default SetPolicyRequest := false 

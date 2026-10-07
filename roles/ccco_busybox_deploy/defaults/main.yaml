@@ -1,0 +1,5 @@
+---
+# Defaults for ccco_busybox_deploy
+busybox_image: "busybox:stable"
+scripts_dir: "/root/ccco-artifacts"
+ccco_namespace: "default"
