@@ -31,7 +31,9 @@ default ResumeContainerRequest := false
 default UpdateContainerRequest := false
 default StatsContainerRequest := true
 default UpdateEphemeralMountsRequest := true
-default RemoveStaleVirtiofsShareMountsRequest := false# container_id must be a 64-character lowercase hex string
+default RemoveStaleVirtiofsShareMountsRequest := false
+
+# container_id must be a 64-character lowercase hex string
 allow_container_id(container_id) if {
   regex.match("^[a-f0-9]{64}$", container_id)
 }
@@ -48,7 +50,9 @@ CopyFileRequest if {
   dir_mode := bits.lsh(1, 31)
   allowed_dir_permission := bits.or(dir_mode, 488)
   input.dir_mode == allowed_dir_permission
-}allow_path(path) if {
+}
+
+allow_path(path) if {
   regex.match("/run/kata-containers/shared/containers/[[:xdigit:]]+", path)
 }
 default UpdateInterfaceRequest := true
