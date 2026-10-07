@@ -1,81 +1,111 @@
-package policy
-default AddARPNeighborsRequest := false
-default AddSwapRequest := false
+package agent_policy
+
 default CheckRequest := true
-default CloseStdinRequest := false
-default CopyFileRequest := false
-CopyFileRequest {
-    allow_path(input.path)
-    dir_mode := bits.lsh(1, 31)
-    allowed_dir_permission := bits.or(dir_mode, 488)
-    input.dir_mode == allowed_dir_permission
-}
-allow_path(path) {
-    regex.match("/run/kata-containers/shared/containers/[[:xdigit:]]+", path)
-}
-default CreateContainerRequest := false
-CreateContainerRequest {
-  allow_image(input.OCI.Annotations["io.kubernetes.cri-o.ImageName"])
-}
-allow_image(image_name) {
-  regex.match("quay\\.io/openshift-release-dev/ocp-v4\\.0-art-dev@sha256:[a-f0-9]{64}", image_name)
-}
-allow_image(image_name) {
-    image_name == "{{ workload_image }}"
-}
 default CreateSandboxRequest := true
 default DestroySandboxRequest := true
-default GetMetricsRequest := false
-default GetOOMEventRequest := true
-default GuestDetailsRequest := false
-default ListInterfacesRequest := false
-default ListRoutesRequest := false
-default MemHotplugByProbeRequest := false
-default OnlineCPUMemRequest := true
-default PauseContainerRequest := false
-default PullImageRequest := false
-default ReadStreamRequest := false
-default RemoveContainerRequest := false
-RemoveContainerRequest {
-    allow_startcontainer(input.container_id)
+
+# --- Container lifecycle ---
+default CreateContainerRequest := false
+CreateContainerRequest if {
+  allow_image(input.OCI.Annotations["io.kubernetes.cri-o.ImageName"])
 }
-allow_startcontainer(container_id) {
-    regex.match("^[a-f0-9]{64}$", container_id)
+
+allow_image(image_name) if {
+  regex.match("quay\\.io/openshift-release-dev/ocp-v4\\.0-art-dev@sha256:[a-f0-9]{64}", image_name)
 }
-default RemoveStaleVirtiofsShareMountsRequest := false
-default ReseedRandomDevRequest := false
-default ResumeContainerRequest := false
-default SetGuestDateTimeRequest := false
-default SetPolicyRequest := false
-default SignalProcessRequest := true
+allow_image(image_name) if {
+  image_name == "{{ workload_image }}"
+}
+
 default StartContainerRequest := false
-StartContainerRequest {
-    allow_startcontainer(input.container_id)
+StartContainerRequest if {
+  allow_container_id(input.container_id)
 }
-allow_startcontainer(container_id) {
-    regex.match("^[a-f0-9]{64}$", container_id)
+
+default RemoveContainerRequest := false
+RemoveContainerRequest if {
+  allow_container_id(input.container_id)
 }
-default StartTracingRequest := false
-default StatsContainerRequest := false
-default StopTracingRequest := false
-default TtyWinResizeRequest := false
+
+default PauseContainerRequest := false
+default ResumeContainerRequest := false
 default UpdateContainerRequest := false
-default UpdateEphemeralMountsRequest := true
-default UpdateInterfaceRequest := true
-default UpdateRoutesRequest := true
-default WaitProcessRequest := false
+default StatsContainerRequest := true
+default PullImageRequest := false
+
+# container_id must be a 64-character lowercase hex string
+allow_container_id(container_id) if {
+  regex.match("^[a-f0-9]{64}$", container_id)
+}
+
+# --- Process / stream ---
+default ExecProcessRequest := false
+default SignalProcessRequest := true
+default WaitProcessRequest := true
 default WriteStreamRequest := false
+default ReadStreamRequest := true
 default WriteStdinRequest := false
 default ReadStdoutRequest := true
 default ReadStderrRequest := true
+default CloseStdinRequest := false
+default TtyWinResizeRequest := false
+
+# --- File / mount ---
+default CopyFileRequest := false
+CopyFileRequest if {
+  allow_path(input.path)
+  dir_mode := bits.lsh(1, 31)
+  allowed_dir_permission := bits.or(dir_mode, 488)
+  input.dir_mode == allowed_dir_permission
+}
+
+allow_path(path) if {
+  regex.match("/run/kata-containers/shared/containers/[[:xdigit:]]+", path)
+}
+
+default UpdateEphemeralMountsRequest := true
+default RemoveStaleVirtiofsShareMountsRequest := false
+
+# --- Networking ---
+default UpdateInterfaceRequest := true
+default UpdateRoutesRequest := true
+default ListInterfacesRequest := false
+default ListRoutesRequest := false
+default AddARPNeighborsRequest := false
 default GetIPTablesRequest := false
 default SetIPTablesRequest := false
-default GetGuestDetailsRequest := false
-GetGuestDetailsRequest {
-    input.mem_block_size == true
-    input.mem_hotplug_probe == true
+
+# --- Guest / host details ---
+default GuestDetailsRequest := false
+GuestDetailsRequest if {
+  input.mem_block_size == true
+  input.mem_hotplug_probe == true
 }
-default GetVolumeStatsRequest := false
+
+default OnlineCPUMemRequest := true
+default MemHotplugByProbeRequest := false
+default ReseedRandomDevRequest := false
+default SetGuestDateTimeRequest := false
+default GetOOMEventRequest := true
+
+# --- Swap / memory agent ---
+default AddSwapRequest := false
+default AddSwapPathRequest := false
+default MemAgentCompactConfig := false
+default MemAgentMemcgConfig := false
+
+# --- Volume / storage ---
+default VolumeStatsRequest := false
 default ResizeVolumeRequest := false
+
+# --- Metrics / diagnostics ---
+default GetMetricsRequest := true
+default GetDiagnosticDataRequest := false
+
+# --- Tracing ---
+default StartTracingRequest := false
+default StopTracingRequest := false
+
+# --- Versioning / policy ---
 default VersionRequest := false
-default ExecProcessRequest := false
+default SetPolicyRequest := false
