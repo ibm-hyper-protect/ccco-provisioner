@@ -1,6 +1,9 @@
 ---
 # Usage: ansible-playbook playbooks/ccco_baremetal.yaml
-# Hosts file is auto-generated from all.yaml — no manual creation needed.
+# Purpose: Full end-to-end deployment — cluster install + PayNow + Busybox workloads.
+#          For subsequent paynow-only re-deploys use:  playbooks/ccco_paynow_workload.yaml
+#          For subsequent busybox-only re-deploys use: playbooks/ccco_busybox_deploy.yaml
+#          For cluster-only re-install use:             playbooks/ccco_install_cluster.yaml
 #
 # Pre-requisites (place in artifacts/ directory before running):
 #   - HKD*.crt                                   : Host Key Document certificate
@@ -21,54 +24,11 @@
       ansible.builtin.import_role:
         name: ccco_setinventory
 
-- name: Generate CCCO contract and deploy PayNow workload
-  hosts: bastion
-  gather_facts: false
-  vars:
-    scripts_dir: "/root/ccco-artifacts"
-    ccco_namespace: "default"
-  vars_files:
-    - "{{ inventory_dir }}/group_vars/all.yaml"
-  tasks:
-    - name: Display deployment start
-      ansible.builtin.debug:
-        msg:
-          - "=========================================="
-          - "CCCO Baremetal PayNow Deployment"
-          - "=========================================="
-          - "Host      : {{ inventory_hostname }}"
-          - "Namespace : {{ ccco_namespace }}"
-          - "Artifacts : {{ scripts_dir }}"
-          - "=========================================="
+- name: Install CCCO cluster components
+  ansible.builtin.import_playbook: ccco_install_cluster.yaml
 
-    - name: Enable IBM Secure Execution (SE) on cluster nodes
-      ansible.builtin.import_role:
-        name: ccco_enable_se
+- name: Deploy PayNow workload
+  ansible.builtin.import_playbook: ccco_paynow_workload.yaml
 
-    - name: Install Node Feature Discovery (NFD) Operator
-      ansible.builtin.import_role:
-        name: ccco_install_nfd
-
-    - name: Install OpenShift Sandboxed Containers (OSC) Operator
-      ansible.builtin.import_role:
-        name: ccco_install_osc
-
-    - name: Create KataConfig and install Kata runtime
-      ansible.builtin.import_role:
-        name: ccco_install_kata
-
-    - name: Generate CCCO contract keys and policy
-      ansible.builtin.import_role:
-        name: ccco_contract_generator
-
-    - name: Create and apply sealed secret
-      ansible.builtin.import_role:
-        name: ccco_sealed_secrets
-
-    - name: Build contract and generate PayNow manifest
-      ansible.builtin.import_role:
-        name: ccco_paynow_deploy
-
-    - name: Build contract and generate Busybox manifest
-      ansible.builtin.import_role:
-        name: ccco_busybox_deploy
+- name: Deploy Busybox workload
+  ansible.builtin.import_playbook: ccco_busybox_deploy.yaml
