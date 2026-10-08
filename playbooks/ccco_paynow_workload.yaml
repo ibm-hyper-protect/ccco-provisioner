@@ -1,5 +1,5 @@
 ---
-# Usage: ansible-playbook playbooks/ccco_workload.yaml
+# Usage: ansible-playbook playbooks/ccco_paynow_workload.yaml
 # Purpose: Generate CCCO contract, apply sealed secrets, and deploy PayNow workload.
 #          Re-run this whenever the workload image, policy, or secrets change.
 #          Cluster components (SE, NFD, OSC, Kata) must already be installed.
