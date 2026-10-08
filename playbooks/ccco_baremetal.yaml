@@ -1,7 +1,8 @@
 ---
 # Usage: ansible-playbook playbooks/ccco_baremetal.yaml
-# Purpose: Full end-to-end deployment — cluster install + PayNow workload.
-#          For subsequent workload-only re-deploys use: playbooks/ccco_paynow_workload.yaml
+# Purpose: Full end-to-end deployment — cluster install + PayNow + Busybox workloads.
+#          For subsequent paynow-only re-deploys use:  playbooks/ccco_paynow_workload.yaml
+#          For subsequent busybox-only re-deploys use: playbooks/ccco_busybox_deploy.yaml
 #          For cluster-only re-install use:             playbooks/ccco_install_cluster.yaml
 #
 # Pre-requisites (place in artifacts/ directory before running):
@@ -28,3 +29,6 @@
 
 - name: Deploy PayNow workload
   ansible.builtin.import_playbook: ccco_paynow_workload.yaml
+
+- name: Deploy Busybox workload
+  ansible.builtin.import_playbook: ccco_busybox_deploy.yaml

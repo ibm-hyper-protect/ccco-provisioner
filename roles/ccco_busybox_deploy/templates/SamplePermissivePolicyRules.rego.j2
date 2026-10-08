@@ -33,7 +33,6 @@ default StatsContainerRequest := true
 default UpdateEphemeralMountsRequest := true
 default RemoveStaleVirtiofsShareMountsRequest := false
 
-# container_id must be a 64-character lowercase hex string
 allow_container_id(container_id) if {
   regex.match("^[a-f0-9]{64}$", container_id)
 }
