@@ -146,7 +146,13 @@
     #         Uses kubernetes.core.k8s_info to list nodes + k8s to launch
     #         a privileged debug Pod per node — no oc debug shell.
     #         Skipped entirely on compact clusters (no dedicated worker nodes).
+    #         Skipped when kata.verify_addon_kernel_service is false (no registry).
     # -----------------------------------------------------------------------
+    - name: Skip kata-addon-kernel.service check (verify_addon_kernel_service=false)
+      ansible.builtin.debug:
+        msg: "kata-addon-kernel.service check skipped — set kata.verify_addon_kernel_service=true when addon_image registry is reachable from worker nodes"
+      when: not (kata.verify_addon_kernel_service | default(true) | bool)
+
     - name: Get worker node names
       kubernetes.core.k8s_info:
         kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
@@ -178,7 +184,7 @@
       when: pure_worker_nodes | length == 0
 
     - name: Verify kata-addon-kernel.service active on each worker node (via debug Pod)
-      when: pure_worker_nodes | length > 0
+      when: pure_worker_nodes | length > 0 and (kata.verify_addon_kernel_service | default(true) | bool)
       block:
 
         - name: Launch privileged debug Pod on each worker node
@@ -212,9 +218,17 @@
                       - "--net"
                       - "--pid"
                       - "--"
-                      - systemctl
-                      - is-active
-                      - kata-addon-kernel.service
+                      - bash
+                      - "-c"
+                      - |
+                        result=$(systemctl show kata-addon-kernel.service --property=Result --value 2>/dev/null)
+                        if [ "$result" = "success" ]; then
+                          echo "kata-addon-kernel.service completed successfully (Result=success)"
+                          exit 0
+                        else
+                          echo "kata-addon-kernel.service Result=$result (expected success)"
+                          exit 1
+                        fi
                     securityContext:
                       privileged: true
           loop: "{{ pure_worker_nodes }}"
@@ -234,16 +248,16 @@
           delay: 10
           loop: "{{ pure_worker_nodes }}"
 
-        - name: Assert kata-addon-kernel.service active on each worker node
+        - name: Assert kata-addon-kernel.service completed successfully on each worker node
           ansible.builtin.assert:
             that:
               - item.resources[0].status.phase == "Succeeded"
             fail_msg: >-
-              kata-addon-kernel.service check FAILED on node
+              kata-addon-kernel.service did NOT complete successfully on node
               {{ item.resources[0].spec.nodeName | default('unknown') }}
               (pod phase={{ item.resources[0].status.phase }})
             success_msg: >-
-              kata-addon-kernel.service is active on
+              kata-addon-kernel.service completed successfully (Result=success) on
               {{ item.resources[0].spec.nodeName | default('unknown') }}
           loop: "{{ svc_pod_status.results }}"
 
