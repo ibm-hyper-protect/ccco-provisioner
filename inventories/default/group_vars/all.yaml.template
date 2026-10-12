@@ -39,6 +39,8 @@ osc_version: ""                  # OSC CSV version, e.g. v1.7.0
 kata:
   addon_image: ""   # e.g. quay.io/ibm_hpcc/ibm-confidential-computing-container:1.2.2.1
   kernel_path: ""   # e.g. /image/ccco-bm-2.0.11.img
+  verify_addon_kernel_service: true   # set to false to skip kata-addon-kernel.service check
+                                      # when addon_image registry is not reachable from worker nodes
 
 # Section 8 - Cluster Auth
 cluster:

@@ -185,9 +185,9 @@
             {%- endif -%}
           {%- endfor -%}
           {%- if workers | length > 0 -%}
-            {{ workers | length }}
+            {{ workers | length | int }}
           {%- else -%}
-            {{ all_nodes_se.resources | length }}
+            {{ all_nodes_se.resources | length | int }}
           {%- endif -%}
 
     - name: Wait for ibm.feature.node.kubernetes.io/se=true on all SE-capable nodes
