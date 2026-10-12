@@ -5,9 +5,18 @@ metadata:
 spec:
   enablePeerPods: false
   logLevel: info
-  # checkNodeSelector scopes kata installation to worker nodes only.
+  # checkNodeEligibility=false — when true, OSC requires nodes to have
+  # feature.node.kubernetes.io/runtime.kata=true before it will install kata.
+  # That label is set by OSC itself only after a successful install, so on a
+  # fresh cluster the condition is never satisfied (deadlock).
+  # Ref: https://docs.redhat.com/en/documentation/openshift_sandboxed_containers/1.6/html-single/user_guide/index#about-node-eligibility-checks_about-osc
+  # SE-capability is enforced upstream by ccco_install_nfd requiring
+  # ibm.feature.node.kubernetes.io/se=true on all worker nodes before this role.
+  checkNodeEligibility: false
+  # kataConfigPoolSelector scopes kata installation to worker nodes only.
   # On compact/SNO clusters every node carries the worker label so all nodes
   # are still covered. On HA clusters this prevents kata from being installed
   # on dedicated master/control-plane nodes, which never run kata workloads.
-  checkNodeSelector:
-    node-role.kubernetes.io/worker: ""
+  kataConfigPoolSelector:
+    matchLabels:
+      node-role.kubernetes.io/worker: ""

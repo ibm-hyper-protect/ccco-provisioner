@@ -99,14 +99,15 @@
         kind: Node
       register: all_nodes_kata_remove
 
-    - name: Set worker_node_count fact (worker role but NOT master/control-plane)
+    - name: Set worker_node_count fact (NOT master and NOT control-plane)
+      # Matches ccco_install_nfd: excludes master/control-plane regardless of
+      # whether the worker label is present. Covers kata-oc and any custom pool.
       ansible.builtin.set_fact:
         worker_node_count: >-
           {%- set result = [] -%}
           {%- for node in all_nodes_kata_remove.resources | default([]) -%}
             {%- set labels = node.metadata.labels | default({}) -%}
-            {%- if 'node-role.kubernetes.io/worker' in labels and
-                   'node-role.kubernetes.io/master' not in labels and
+            {%- if 'node-role.kubernetes.io/master' not in labels and
                    'node-role.kubernetes.io/control-plane' not in labels -%}
               {%- set _ = result.append(node.metadata.name) -%}
             {%- endif -%}

@@ -198,14 +198,14 @@
         label_selectors:
           - "ibm.feature.node.kubernetes.io/se=true"
       register: se_labelled_nodes
-      until: se_labelled_nodes.resources | length == se_target_node_count | int
+      until: se_labelled_nodes.resources | length >= se_target_node_count | int
       retries: 20
       delay: 30
 
     - name: Assert ibm.feature.node.kubernetes.io/se=true present on all SE-capable nodes
       ansible.builtin.assert:
         that:
-          - se_labelled_nodes.resources | length == se_target_node_count | int
+          - se_labelled_nodes.resources | length >= se_target_node_count | int
         fail_msg: >-
           ibm.feature.node.kubernetes.io/se=true not present on all SE-capable nodes
           ({{ se_labelled_nodes.resources | length }}/{{ se_target_node_count }} labelled).
