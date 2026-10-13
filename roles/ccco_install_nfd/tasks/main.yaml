@@ -174,12 +174,18 @@
       register: all_nodes_se
 
     - name: Set se_target_node_count (worker-only nodes on HA, all nodes on compact/SNO)
+      # Matches ccco_enable_se worker_node_count definition: nodes that carry the
+      # worker label but NOT master/control-plane. This is the authoritative definition
+      # because ccco_enable_se applies the SE MachineConfig to exactly these nodes.
+      # On compact/SNO all nodes have both master+worker labels so worker_node_count=0;
+      # fall back to all nodes so the SE label wait covers every node.
       ansible.builtin.set_fact:
         se_target_node_count: >-
           {%- set workers = [] -%}
           {%- for node in all_nodes_se.resources -%}
             {%- set labels = node.metadata.labels | default({}) -%}
-            {%- if 'node-role.kubernetes.io/master' not in labels and
+            {%- if 'node-role.kubernetes.io/worker' in labels and
+                   'node-role.kubernetes.io/master' not in labels and
                    'node-role.kubernetes.io/control-plane' not in labels -%}
               {%- set _ = workers.append(node.metadata.name) -%}
             {%- endif -%}
@@ -191,6 +197,9 @@
           {%- endif -%}
 
     - name: Wait for ibm.feature.node.kubernetes.io/se=true on all SE-capable nodes
+      # Fetch ALL nodes with the SE label, then count only worker nodes (same
+      # definition as se_target_node_count) to avoid SE-capable masters inflating
+      # the count before all workers are labelled.
       kubernetes.core.k8s_info:
         kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
         api_version: v1
@@ -198,17 +207,43 @@
         label_selectors:
           - "ibm.feature.node.kubernetes.io/se=true"
       register: se_labelled_nodes
-      until: se_labelled_nodes.resources | length >= se_target_node_count | int
+      until: >-
+        {%- set labelled_workers = [] -%}
+        {%- for node in se_labelled_nodes.resources -%}
+          {%- set labels = node.metadata.labels | default({}) -%}
+          {%- if se_target_node_count | int == all_nodes_se.resources | length or
+                 ('node-role.kubernetes.io/worker' in labels and
+                  'node-role.kubernetes.io/master' not in labels and
+                  'node-role.kubernetes.io/control-plane' not in labels) -%}
+            {%- set _ = labelled_workers.append(node.metadata.name) -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ labelled_workers | length >= se_target_node_count | int }}
       retries: 20
       delay: 30
+
+    - name: Count SE-labelled worker nodes for assert
+      ansible.builtin.set_fact:
+        se_labelled_worker_count: >-
+          {%- set labelled_workers = [] -%}
+          {%- for node in se_labelled_nodes.resources -%}
+            {%- set labels = node.metadata.labels | default({}) -%}
+            {%- if se_target_node_count | int == all_nodes_se.resources | length or
+                   ('node-role.kubernetes.io/worker' in labels and
+                    'node-role.kubernetes.io/master' not in labels and
+                    'node-role.kubernetes.io/control-plane' not in labels) -%}
+              {%- set _ = labelled_workers.append(node.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ labelled_workers | length | int }}
 
     - name: Assert ibm.feature.node.kubernetes.io/se=true present on all SE-capable nodes
       ansible.builtin.assert:
         that:
-          - se_labelled_nodes.resources | length >= se_target_node_count | int
+          - se_labelled_worker_count | int >= se_target_node_count | int
         fail_msg: >-
           ibm.feature.node.kubernetes.io/se=true not present on all SE-capable nodes
-          ({{ se_labelled_nodes.resources | length }}/{{ se_target_node_count }} labelled).
+          ({{ se_labelled_worker_count }}/{{ se_target_node_count }} worker nodes labelled).
           KataConfig will fail to detect TEE platform without this label.
           Check that ccco_enable_se ran successfully and the NodeFeatureRule ibm-se-rule was applied.
         success_msg: >-

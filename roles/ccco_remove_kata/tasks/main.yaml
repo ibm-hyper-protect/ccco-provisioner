@@ -99,15 +99,17 @@
         kind: Node
       register: all_nodes_kata_remove
 
-    - name: Set worker_node_count fact (NOT master and NOT control-plane)
-      # Matches ccco_install_nfd: excludes master/control-plane regardless of
-      # whether the worker label is present. Covers kata-oc and any custom pool.
+    - name: Set worker_node_count fact (worker label, NOT master and NOT control-plane)
+      # Matches ccco_enable_se and ccco_install_nfd: nodes that carry the worker
+      # label but NOT master/control-plane. On compact/SNO all nodes carry both
+      # master+worker labels so worker_node_count=0 and worker MCP wait is skipped.
       ansible.builtin.set_fact:
         worker_node_count: >-
           {%- set result = [] -%}
           {%- for node in all_nodes_kata_remove.resources | default([]) -%}
             {%- set labels = node.metadata.labels | default({}) -%}
-            {%- if 'node-role.kubernetes.io/master' not in labels and
+            {%- if 'node-role.kubernetes.io/worker' in labels and
+                   'node-role.kubernetes.io/master' not in labels and
                    'node-role.kubernetes.io/control-plane' not in labels -%}
               {%- set _ = result.append(node.metadata.name) -%}
             {%- endif -%}
@@ -118,6 +120,11 @@
     # Step 4: Pause for MCP reconciler, then wait master MCP Updated=True
     #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
     #         Budget: 30 retries × 60s = 30 minutes
+    #         Note: with kataConfigPoolSelector scoping kata to workers only,
+    #         KataConfig removal on HA clusters does not touch the master MCP.
+    #         This wait is a no-op on HA (master MCP is already Updated=True)
+    #         but is kept as a harmless safety check for compact/SNO clusters
+    #         where masters also run kata workloads.
     # -----------------------------------------------------------------------
     - name: Pause 90s for master MCP reconciler to process KataConfig removal
       ansible.builtin.pause:

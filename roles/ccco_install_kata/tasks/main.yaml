@@ -80,12 +80,13 @@
       ansible.builtin.assert:
         that:
           - kataconfig_applied.resources | length > 0
-          - kataconfig_applied.resources[0].spec.kataConfigPoolSelector is not none
+          - kataconfig_applied.resources[0].spec.kataConfigPoolSelector is defined
           - kataconfig_applied.resources[0].spec.kataConfigPoolSelector.matchLabels is defined
         fail_msg: >-
-          kataConfigPoolSelector was silently pruned from the applied KataConfig.
-          This means kata will install on ALL nodes including masters.
-          Check that OSC CRD version supports this field
+          kataConfigPoolSelector was silently pruned from the applied KataConfig —
+          kata is already installing on ALL nodes including masters.
+          Run the cleanup playbook (ccco_cleanup.yaml) to remove KataConfig before retrying.
+          Check that OSC CRD version supports kataConfigPoolSelector
           (tested: kataconfiguration.openshift.io/v1, OSC v1.13.x).
         success_msg: "kataConfigPoolSelector retained on applied KataConfig — OK"
 
@@ -225,7 +226,7 @@
           set kata.verify_addon_kernel_service=true when addon_image registry is reachable from worker nodes
       when: pure_worker_nodes | length > 0 and not (kata.verify_addon_kernel_service | default(true) | bool)
 
-    - name: Verify kata-addon-kernel.service active on each worker node (via debug Pod)
+    - name: Verify kata-addon-kernel.service completed successfully on each worker node (via debug Pod)
       when: pure_worker_nodes | length > 0 and (kata.verify_addon_kernel_service | default(true) | bool)
       block:
 
@@ -267,18 +268,18 @@
                           --property=LoadState \
                           --property=Result \
                           --property=ExecMainStatus \
-                          --property=ActiveEnterTimestamp 2>&1)
+                          --property=ExecMainExitTimestamp 2>&1)
                         echo "$out"
                         load=$(echo "$out" | grep '^LoadState=' | cut -d= -f2)
                         result=$(echo "$out" | grep '^Result=' | cut -d= -f2)
                         exit_status=$(echo "$out" | grep '^ExecMainStatus=' | cut -d= -f2)
-                        ts=$(echo "$out" | grep '^ActiveEnterTimestamp=' | cut -d= -f2)
+                        ts=$(echo "$out" | grep '^ExecMainExitTimestamp=' | cut -d= -f2)
                         if [ "$load" != "loaded" ]; then
                           echo "FAIL: kata-addon-kernel.service is not loaded (LoadState=$load) — service may be missing"
                           exit 1
                         fi
                         if [ -z "$ts" ]; then
-                          echo "FAIL: kata-addon-kernel.service has never run (ActiveEnterTimestamp is empty)"
+                          echo "FAIL: kata-addon-kernel.service has never run (ExecMainExitTimestamp is empty)"
                           exit 1
                         fi
                         if [ "$result" != "success" ] || [ "$exit_status" != "0" ]; then
@@ -305,30 +306,30 @@
           delay: 10
           loop: "{{ pure_worker_nodes }}"
 
-        - name: Assert and clean up debug Pods
-          block:
-            - name: Assert kata-addon-kernel.service completed successfully on each worker node
-              ansible.builtin.assert:
-                that:
-                  - item.resources[0].status.phase == "Succeeded"
-                fail_msg: >-
-                  kata-addon-kernel.service did NOT complete successfully on node
-                  {{ item.resources[0].spec.nodeName | default('unknown') }}
-                  (pod phase={{ item.resources[0].status.phase }})
-                success_msg: >-
-                  kata-addon-kernel.service completed successfully (Result=success) on
-                  {{ item.resources[0].spec.nodeName | default('unknown') }}
-              loop: "{{ svc_pod_status.results }}"
-          always:
-            - name: Clean up debug Pods
-              kubernetes.core.k8s:
-                kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
-                state: absent
-                api_version: v1
-                kind: Pod
-                name: "kata-svc-check-{{ item | replace('.', '-') }}"
-                namespace: default
-              loop: "{{ pure_worker_nodes }}"
+        - name: Assert kata-addon-kernel.service completed successfully on each worker node
+          ansible.builtin.assert:
+            that:
+              - item.resources[0].status.phase == "Succeeded"
+            fail_msg: >-
+              kata-addon-kernel.service did NOT complete successfully on node
+              {{ item.resources[0].spec.nodeName | default('unknown') }}
+              (pod phase={{ item.resources[0].status.phase }})
+            success_msg: >-
+              kata-addon-kernel.service completed successfully (Result=success) on
+              {{ item.resources[0].spec.nodeName | default('unknown') }}
+          loop: "{{ svc_pod_status.results }}"
+
+      always:
+        - name: Clean up debug Pods
+          kubernetes.core.k8s:
+            kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+            state: absent
+            api_version: v1
+            kind: Pod
+            name: "kata-svc-check-{{ item | replace('.', '-') }}"
+            namespace: default
+          loop: "{{ pure_worker_nodes }}"
+          when: pure_worker_nodes | length > 0 and (kata.verify_addon_kernel_service | default(true) | bool)
 
     # -----------------------------------------------------------------------
     # Final summary
