@@ -12,7 +12,7 @@
 #   2. Delete worker SE MachineConfig — when mc_worker_present
 #   3. Pause 90s → wait master MCP Updated=True, Updating=False, Degraded=False (30×60s)
 #      — when master MC was deleted
-#   4. Pause 90s → wait worker MCP same conditions (30×60s)
+#   4. Pause 90s → wait worker MCP same conditions (90×60s)
 #      — when worker MC was deleted
 
 - name: Ensure kubernetes Python library is installed on bastion
@@ -135,7 +135,8 @@
     # -----------------------------------------------------------------------
     # Step 4: Wait for worker MCP rollout after worker MC removal
     #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
-    #         Budget: 30 retries × 60s = 30 minutes
+    #         Budget: 90 retries × 60s = 90 minutes (workers roll one at a
+    #         time, ~15 min each on s390x with ODF drains)
     # -----------------------------------------------------------------------
     - name: Pause 90s for worker MCP reconciler to start after SE MC removal
       ansible.builtin.pause:
@@ -163,7 +164,7 @@
           default([]) |
           selectattr('type', 'equalto', 'Degraded') |
           selectattr('status', 'equalto', 'False') | list | length > 0)
-      retries: 30
+      retries: 90
       delay: 60
       when: mc_worker_present | bool
 

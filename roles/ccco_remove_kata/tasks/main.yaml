@@ -8,9 +8,13 @@
 #          (0 = skip all)
 #   1. Delete KataConfig CR — when kataconfig_count > 0
 #   2. Wait for KataConfig CR to be fully deleted (60×60s = 60 minutes)
-#   3. Pause 90s → wait master MCP Updated=True, Updating=False, Degraded=False
+#   3. Detect worker_node_count (same logic as ccco_enable_se)
+#      worker_node_count=0 → compact/SNO, worker_node_count>0 → HA
+#   4. Pause 90s → wait master MCP Updated=True, Updating=False, Degraded=False
 #      (30×60s = 30 minutes)
-#   4. Verify kata-cc RuntimeClass is removed: count == 0 + assert
+#   5. Pause 90s → wait worker MCP same conditions (30×60s)
+#      — only when worker_node_count > 0 (HA cluster)
+#   6. Verify kata-cc RuntimeClass is removed: count == 0 + assert
 
 - name: Ensure kubernetes Python library is installed on bastion
   ansible.builtin.pip:
@@ -82,9 +86,45 @@
       when: kataconfig_present | bool
 
     # -----------------------------------------------------------------------
-    # Step 3: Pause for MCP reconciler, then wait master MCP Updated=True
+    # Step 3: Detect dedicated worker nodes (same logic as ccco_enable_se).
+    #         Always runs — unconditionally — so worker_node_count is always
+    #         defined regardless of whether KataConfig was present.
+    #         worker_node_count=0  → compact / SNO  → worker MCP wait skipped
+    #         worker_node_count>0  → HA cluster     → worker MCP wait runs
+    # -----------------------------------------------------------------------
+    - name: Get all nodes info for MCP topology detection
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: v1
+        kind: Node
+      register: all_nodes_kata_remove
+
+    - name: Set worker_node_count fact (worker label, NOT master and NOT control-plane)
+      # Matches ccco_enable_se and ccco_install_nfd: nodes that carry the worker
+      # label but NOT master/control-plane. On compact/SNO all nodes carry both
+      # master+worker labels so worker_node_count=0 and worker MCP wait is skipped.
+      ansible.builtin.set_fact:
+        worker_node_count: >-
+          {%- set result = [] -%}
+          {%- for node in all_nodes_kata_remove.resources | default([]) -%}
+            {%- set labels = node.metadata.labels | default({}) -%}
+            {%- if 'node-role.kubernetes.io/worker' in labels and
+                   'node-role.kubernetes.io/master' not in labels and
+                   'node-role.kubernetes.io/control-plane' not in labels -%}
+              {%- set _ = result.append(node.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result | length }}
+
+    # -----------------------------------------------------------------------
+    # Step 4: Pause for MCP reconciler, then wait master MCP Updated=True
     #         Uses kubernetes.core.k8s_info + Jinja2 selectattr — no oc shell.
     #         Budget: 30 retries × 60s = 30 minutes
+    #         Note: with kataConfigPoolSelector scoping kata to workers only,
+    #         KataConfig removal on HA clusters does not touch the master MCP.
+    #         This wait is a no-op on HA (master MCP is already Updated=True)
+    #         but is kept as a harmless safety check for compact/SNO clusters
+    #         where masters also run kata workloads.
     # -----------------------------------------------------------------------
     - name: Pause 90s for master MCP reconciler to process KataConfig removal
       ansible.builtin.pause:
@@ -129,7 +169,54 @@
       when: kataconfig_present | bool
 
     # -----------------------------------------------------------------------
-    # Step 4: Verify kata-cc RuntimeClass is removed
+    # Step 5: Pause for MCP reconciler, then wait worker MCP Updated=True
+    #         Skipped on compact/SNO (worker_node_count=0).
+    #         Budget: 30 retries × 60s = 30 minutes
+    # -----------------------------------------------------------------------
+    - name: Pause 90s for worker MCP reconciler to process KataConfig removal
+      ansible.builtin.pause:
+        seconds: 90
+      when: kataconfig_present | bool and worker_node_count | int > 0
+
+    - name: Wait for worker MachineConfigPool to settle after KataConfig removal
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+        name: worker
+      register: mcp_worker_kata_wait
+      until: >-
+        (mcp_worker_kata_wait.resources | length > 0) and
+        (mcp_worker_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updated') |
+          selectattr('status', 'equalto', 'True') | list | length > 0) and
+        (mcp_worker_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Updating') |
+          selectattr('status', 'equalto', 'False') | list | length > 0) and
+        (mcp_worker_kata_wait.resources[0].status.conditions |
+          default([]) |
+          selectattr('type', 'equalto', 'Degraded') |
+          selectattr('status', 'equalto', 'False') | list | length > 0)
+      retries: 30
+      delay: 60
+      when: kataconfig_present | bool and worker_node_count | int > 0
+
+    - name: Display worker MCP final conditions after KataConfig removal
+      ansible.builtin.debug:
+        msg: >-
+          {%- set conds = (mcp_worker_kata_wait.resources | default([{}]))[0].status.conditions | default([]) -%}
+          {%- set result = [] -%}
+          {%- for c in conds -%}
+            {%- set _ = result.append(c.type ~ '=' ~ c.status) -%}
+          {%- endfor -%}
+          worker MCP conditions: {{ result | join(', ') }}
+        verbosity: 1
+      when: kataconfig_present | bool and worker_node_count | int > 0
+
+    # -----------------------------------------------------------------------
+    # Step 6: Verify kata-cc RuntimeClass is removed
     #         Uses kubernetes.core.k8s_info — no oc shell.
     # -----------------------------------------------------------------------
     - name: Get kata-cc RuntimeClass info (expect absent)
@@ -157,6 +244,7 @@
           - "KataConfig CR  : deleted"
           - "RuntimeClass   : kata-cc removed"
           - "Master MCP     : rolled out cleanly"
+          - "Worker MCP     : {{ 'rolled out cleanly' if worker_node_count | int > 0 else 'skipped (compact/SNO cluster)' }}"
           - "=========================================="
       when: kataconfig_present | bool
 

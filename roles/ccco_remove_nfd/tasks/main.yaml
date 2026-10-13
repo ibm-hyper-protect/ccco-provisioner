@@ -56,7 +56,7 @@
     - name: Delete IBM SE NodeFeatureRule CR (ibm-se-rule)
       kubernetes.core.k8s:
         kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
-        api_version: nfd.k8s-sigs.io/v1alpha1
+        api_version: nfd.openshift.io/v1alpha1
         kind: NodeFeatureRule
         name: ibm-se-rule
         namespace: openshift-nfd
