@@ -53,7 +53,7 @@
       export PASSWORD="$(openssl rand 32 | base64 -w0)"
       ENCRYPTED_PASSWORD="$(echo -n "$PASSWORD" | base64 -d | openssl pkeyutl -encrypt -inkey $CONTRACT_KEY -certin -pkeyopt rsa_padding_mode:pkcs1 | base64 -w0)"
       export ENCRYPTED_WORKLOAD="$(echo -n "$PASSWORD" | base64 -d | openssl enc -aes-256-cbc -pbkdf2 -pass stdin -in "$WORKLOAD" | base64 -w0)"
-      echo "workload: hyper-protect-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_WORKLOAD}" > encrypted-workload.yaml
+      echo "workload: contract-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_WORKLOAD}" > encrypted-workload.yaml
     executable: /bin/bash
 
 - name: Generate contract signing keys
@@ -115,7 +115,7 @@
       export PASSWORD="$(openssl rand 32 | base64 -w0)"
       export ENCRYPTED_PASSWORD="$(echo -n "$PASSWORD" | base64 -d | openssl pkeyutl -encrypt -inkey $CONTRACT_KEY -certin -pkeyopt rsa_padding_mode:pkcs1 | base64 -w0)"
       export ENCRYPTED_ENV="$(echo -n "$PASSWORD" | base64 -d | openssl enc -aes-256-cbc -pbkdf2 -pass stdin -in "$ENV" | base64 -w0)"
-      echo "env: hyper-protect-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_ENV}" > encrypted-env.yaml
+      echo "env: contract-basic.${ENCRYPTED_PASSWORD}.${ENCRYPTED_ENV}" > encrypted-env.yaml
     executable: /bin/bash
 
 - name: Generate contract signature
@@ -123,8 +123,8 @@
   ansible.builtin.shell:
     cmd: |
       cd {{ scripts_dir }}
-      export workload=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-workload.yaml)
-      export env=$(sed -n '1s/.*\(hyper-protect-basic.*\)/\1/p' encrypted-env.yaml)
+      export workload=$(sed -n '1s/.*\(contract-basic.*\)/\1/p' encrypted-workload.yaml)
+      export env=$(sed -n '1s/.*\(contract-basic.*\)/\1/p' encrypted-env.yaml)
       echo "$workload$env" > contract.txt
       cat contract.txt | tr -d "\n\r" | openssl dgst -sha256 -sign private.pem -passin pass:{{ contract.signing_passphrase }} | openssl enc -base64 | tr -d ' \n' > envWorkloadSignature.txt
     executable: /bin/bash
