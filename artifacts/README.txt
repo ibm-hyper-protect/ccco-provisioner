@@ -10,4 +10,11 @@
 # All files are required, including the two common_app_*.pem files, even when
 # only deploying Busybox. The first match per pattern is used.
 #
+# No TLS certificate handy? Generate a self-signed pair for testing:
+#
+#   openssl req -x509 -newkey rsa:4096 -nodes -days 365 \
+#     -subj "/CN=<your-hostname>" \
+#     -keyout artifacts/common_app_key.pem \
+#     -out artifacts/common_app_cert.pem
+#
 # This directory is git-ignored. Do NOT commit secrets or certificates.

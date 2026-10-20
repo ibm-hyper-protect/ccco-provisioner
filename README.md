@@ -88,6 +88,17 @@ Place these files in the `artifacts/` directory (git-ignored) before running:
 - All files except the two `common_app_*.pem` files are auto-discovered by pattern. The first match is used, so keep only one file per pattern.
 - `common_app_*.pem` are copied on **every** workload run (PayNow and Busybox), so both must exist even if you only deploy Busybox.
 
+**Don't have a certificate handy?** Generate a self-signed pair for testing from the repository root (use a real certificate for anything beyond testing):
+
+```bash
+openssl req -x509 -newkey rsa:4096 -nodes -days 365 \
+  -subj "/CN=<your-hostname>" \
+  -keyout artifacts/common_app_key.pem \
+  -out artifacts/common_app_cert.pem
+```
+
+Keep the `.pem` file names. A `.crt` name in `artifacts/` would be picked up as the contract encryption certificate.
+
 
 ## 3. Set up SSH access
 
