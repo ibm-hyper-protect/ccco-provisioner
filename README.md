@@ -56,12 +56,12 @@ podman load -i images/ibm-confidential-computing-container-v1.2.2.2.tar.gz
 podman images
 
 # 3. Tag the image for your registry
-podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 quay.io/<your_namespace>/<repository-name>:<tag>   # quay.io
-podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 icr.io/<your_namespace>/<repository-name>:<tag>    # icr.io
+podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2   # quay.io
+podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 icr.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2    # icr.io
 
 # 4. Push the image
-podman push quay.io/<your_namespace>/<repository-name>:<tag>       # quay.io
-podman push icr.io/<your_namespace>/<repository-name>:<tag>        # icr.io
+podman push quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2       # quay.io
+podman push icr.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2        # icr.io
 ```
 
 Verify the image is in your registry:
@@ -169,7 +169,7 @@ osc_version: "v1.13.1"
 
 # Section 7 - KataConfig
 kata:
-  addon_image: ""         # e.g. quay.io/ibm_hpcc/ibm-confidential-computing-container:1.2.2.2
+  addon_image: ""         # e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2
   kernel_path: ""         # e.g. /image/ccco-bm-2.0.11.img
   verify_addon_kernel_service: true
 
@@ -194,6 +194,7 @@ cluster:
 | | `kernel_path` | Path to the IBM SE kernel image inside the container image |
 | | `verify_addon_kernel_service` | `true` checks `kata-addon-kernel.service` on each worker. Set `false` if the registry is not reachable from worker nodes |
 | 8 Cluster auth | `auth_dir_path` | Folder on the bastion containing the `kubeconfig` file, **without** the filename. `/kubeconfig` is appended automatically |
+| *(not in `all.yaml`)* | `workload_image` | **Not user-configurable.** Fixed at the role default `ghcr.io/ibm-hyper-protect/paynow-website:s390x-v1.0.3` (`roles/ccco_contract_generator/defaults/main.yaml`). It is the only image the generated REGO policy allows, and it is also hardcoded in the PayNow pod manifest template |
 
 `inventories/default/hosts` is generated from `all.yaml` on every run — do not edit it. Both files are git-ignored.
 
