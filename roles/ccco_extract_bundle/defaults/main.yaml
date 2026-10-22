@@ -1,0 +1,2 @@
+---
+ccco_artifacts_dir: "{{ playbook_dir }}/../artifacts"

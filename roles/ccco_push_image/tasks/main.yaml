@@ -1,0 +1,126 @@
+---
+# Role: ccco_push_image
+# Purpose: Take the CCCO image from the IBM fixpack bundle and push it to a registry
+#          using podman on the bastion.
+#          Sets the fact `resolved_addon_image` with the final image reference.
+#
+# Not covered here (done later): pull secret, kata.addon_image wiring.
+#
+# Steps:
+#   1. Validate variables
+#   2. Extract the bundle on the controller (ccco_extract_bundle) -> files land in artifacts/
+#   3. Copy the image tar to the bastion
+#   4. podman login -> load -> tag -> push
+#   5. Cleanup (always): logout, remove temp tarball and local images
+
+- name: Validate imagepull variables
+  ansible.builtin.assert:
+    that:
+      - imagepull is defined
+      - imagepull.registry_name | default('', true) | trim != ''
+      - imagepull.user_name | default('', true) | trim != ''
+      - imagepull.password | default('', true) | trim != ''
+      - imagepull.target_namespace | default('', true) | trim != ''
+    fail_msg: >-
+      Set imagepull.registry_name, user_name, password and
+      target_namespace in all.yaml (see all.yaml.template, Section 9).
+
+- name: Check podman is installed on bastion
+  ansible.builtin.command: podman --version
+  changed_when: false
+
+- name: Extract the image tar, sealed secret client and SE header from the bundle
+  ansible.builtin.include_role:
+    name: ccco_extract_bundle
+
+- name: Push image to registry
+  vars:
+    remote_tarball: /tmp/ccco-image.tar.gz
+  block:
+
+    - name: Copy image tarball to bastion
+      ansible.builtin.copy:
+        src: "{{ ccco_image_tarball }}"
+        dest: "{{ remote_tarball }}"
+        mode: "0600"
+
+    - name: Log in to registry
+      ansible.builtin.shell: |
+        echo "$REG_PASS" | podman login -u "$REG_USER" --password-stdin "$REG_HOST"
+      environment:
+        REG_HOST: "{{ imagepull.registry_name }}"
+        REG_USER: "{{ imagepull.user_name }}"
+        REG_PASS: "{{ imagepull.password }}"
+      changed_when: false
+      no_log: true
+
+    - name: Load image tarball into podman
+      ansible.builtin.command: podman load -i {{ remote_tarball }}
+      register: podman_load
+      changed_when: true
+
+    - name: Assert the tarball contained exactly one image
+      ansible.builtin.assert:
+        that: podman_load.stdout_lines | select('match', '^Loaded image') | list | length == 1
+        fail_msg: >-
+          Expected exactly one image in the tarball, podman loaded:
+          {{ podman_load.stdout_lines | select('match', '^Loaded image') | list }}
+
+    # podman prints e.g. "Loaded image: icr.io/ibm_hpcc/some-image:1.2.2.2"
+    - name: Get loaded image reference
+      ansible.builtin.set_fact:
+        loaded_image_ref: >-
+          {{ podman_load.stdout_lines
+             | select('match', '^Loaded image')
+             | first
+             | regex_replace('^Loaded image[^:]*:\s*', '')
+             | trim }}
+
+    # Keep only "<name>:<tag>" and place it under <registry>/<namespace>/
+    - name: Build target image reference
+      ansible.builtin.set_fact:
+        resolved_addon_image: >-
+          {{ imagepull.registry_name }}/{{ imagepull.target_namespace }}/{{ loaded_image_ref | regex_replace('^.*/', '') }}
+
+    - name: Tag image for the target registry
+      ansible.builtin.command: podman tag {{ loaded_image_ref }} {{ resolved_addon_image }}
+      changed_when: true
+
+    - name: Push image to registry
+      ansible.builtin.command: podman push {{ resolved_addon_image }}
+      changed_when: true
+
+    # podman pull forces a real registry round-trip (a local inspect would always pass).
+    # The pulled copy is removed in the cleanup below.
+    - name: Verify the image is available in the registry
+      ansible.builtin.command: podman pull --quiet {{ resolved_addon_image }}
+      changed_when: false
+
+    - name: Display pushed image
+      ansible.builtin.debug:
+        msg: "Image pushed: {{ resolved_addon_image }}"
+
+  always:
+    - name: Log out from registry
+      ansible.builtin.command: podman logout {{ imagepull.registry_name }}
+      changed_when: false
+      failed_when: false
+
+    - name: Remove temporary tarball from bastion
+      ansible.builtin.file:
+        path: /tmp/ccco-image.tar.gz
+        state: absent
+
+    # The extracted image tar is also a *.tar.gz; remove it so artifacts/ holds only the bundle.
+    - name: Remove extracted image tar from artifacts/ on the controller
+      ansible.builtin.file:
+        path: "{{ ccco_image_tarball }}"
+        state: absent
+      delegate_to: localhost
+      when: ccco_image_tarball is defined
+
+    - name: Remove local images from podman store
+      ansible.builtin.shell: |
+        podman rmi -f {{ loaded_image_ref | default('', true) }} {{ resolved_addon_image | default('', true) }} || true
+      changed_when: false
+      when: loaded_image_ref is defined

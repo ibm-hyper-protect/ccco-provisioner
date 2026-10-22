@@ -51,6 +51,19 @@
       ansible.builtin.import_role:
         name: ccco_install_osc
 
+    # Optional: only runs when the IBM fixpack bundle (a *.tar.gz) is in artifacts/.
+    # Sets resolved_addon_image, which ccco_install_kata then uses.
+    - name: Push CCCO image to registry
+      ansible.builtin.include_role:
+        name: ccco_push_image
+      when: lookup('ansible.builtin.fileglob', playbook_dir ~ '/../artifacts/*.tar.gz', wantlist=True) | length > 0
+
+    # Optional: only runs when imagepull.registry_name is set in all.yaml.
+    - name: Configure cluster to pull the CCCO image
+      ansible.builtin.include_role:
+        name: ccco_configure_image
+      when: imagepull is defined and imagepull.registry_name | default('', true) | trim != ''
+
     - name: Create KataConfig and install Kata runtime
       ansible.builtin.import_role:
         name: ccco_install_kata

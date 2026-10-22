@@ -38,6 +38,9 @@ osc_version: ""                  # OSC CSV version, e.g. v1.7.0
 # Section 7 - KataConfig
 kata:
   addon_image: ""   # e.g. quay.io/ibm_hpcc/ibm-confidential-computing-container:1.2.2.1
+                    # Required unless the IBM fixpack bundle is placed in artifacts/ (Section 9): then the image is pushed
+                    # and its reference is used automatically. That reference only lives for one playbook
+                    # run, so for later standalone runs (e.g. ccco_install_kata.yaml) set it here as well.
   kernel_path: ""   # e.g. /image/ccco-bm-2.0.11.img
   verify_addon_kernel_service: true   # set to false to skip kata-addon-kernel.service check
                                       # when addon_image registry is not reachable from worker nodes
@@ -48,3 +51,10 @@ cluster:
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
   # Example: if your kubeconfig is at /root/auth/kubeconfig, set this to /root/auth
   auth_dir_path: ''  # e.g. /root/auth
+
+# Section 9 - Image Push (used by playbooks/ccco_push_image.yaml)
+imagepull:
+  registry_name: ""     # e.g. quay.io, icr.io, my-registry:5000
+  user_name: ""         # registry username (or 'iamapikey' for ICR)
+  password: ""          # registry password / token / API key
+  target_namespace: ""  # your org/namespace in the registry

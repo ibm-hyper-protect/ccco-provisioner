@@ -46,6 +46,11 @@
       ansible.builtin.import_role:
         name: ccco_remove_kata
 
+    - name: Remove CCCO image pull configuration
+      ansible.builtin.include_role:
+        name: ccco_remove_image_config
+      when: imagepull is defined and imagepull.registry_name | default('', true) | trim != ''
+
     - name: Remove OpenShift Sandboxed Containers (OSC) Operator
       ansible.builtin.import_role:
         name: ccco_remove_osc

@@ -1,0 +1,78 @@
+---
+# Role: ccco_extract_bundle
+# Purpose: Extract the IBM fixpack bundle (the one *.tar.gz the user places in artifacts/)
+#          on the controller and keep only what the provisioner needs, placing it in
+#          artifacts/:
+#            - image tar               (images/*.tar.gz)
+#            - sealed secret client    (binary/*-linux-s390x)
+#            - SE header               (se-hdr.bin)
+#          The temp extraction directory is deleted right after the copy.
+#          Sets the fact `ccco_image_tarball` (path of the image tar in artifacts/).
+
+- name: Find the bundle in artifacts/
+  ansible.builtin.find:
+    paths: "{{ ccco_artifacts_dir }}"
+    patterns: "*.tar.gz"
+  delegate_to: localhost
+  register: bundle_found
+
+- name: Assert exactly one bundle is present
+  ansible.builtin.assert:
+    that: bundle_found.files | length == 1
+    fail_msg: >-
+      Expected exactly one *.tar.gz (the IBM fixpack bundle) in artifacts/, found
+      {{ bundle_found.files | length }}. Keep only the bundle there.
+
+- name: Extract bundle and copy the needed files to artifacts/
+  delegate_to: localhost
+  block:
+
+    - name: Create temp directory inside artifacts/
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ ccco_artifacts_dir }}"
+        prefix: bundle-
+      register: bundle_tmp
+
+    - name: Extract bundle into temp directory
+      ansible.builtin.command: tar -xzf {{ bundle_found.files[0].path }} -C {{ bundle_tmp.path }}
+      changed_when: true
+
+    - name: Locate image tar, sealed secret client and SE header
+      ansible.builtin.find:
+        paths: "{{ bundle_tmp.path }}/{{ item.dir }}"
+        patterns: "{{ item.pattern }}"
+      loop:
+        - { dir: images, pattern: "*.tar.gz" }
+        - { dir: binary, pattern: "ibm-ccco-sealed-secret-creator-client-*-linux-s390x" }
+        - { dir: ".", pattern: "se-hdr.bin" }
+      register: bundle_files
+
+    - name: Assert exactly one of each was found
+      ansible.builtin.assert:
+        that: item.files | length == 1
+        fail_msg: "Expected exactly one '{{ item.item.pattern }}' in {{ item.item.dir }}/ of the bundle, found {{ item.files | length }}."
+      loop: "{{ bundle_files.results }}"
+      loop_control:
+        label: "{{ item.item.pattern }}"
+
+    - name: Copy the files to artifacts/
+      ansible.builtin.copy:
+        src: "{{ item.files[0].path }}"
+        dest: "{{ ccco_artifacts_dir }}/"
+        remote_src: true
+        mode: preserve
+      loop: "{{ bundle_files.results }}"
+      loop_control:
+        label: "{{ item.files[0].path | basename }}"
+
+    - name: Set image tarball path
+      ansible.builtin.set_fact:
+        ccco_image_tarball: "{{ ccco_artifacts_dir }}/{{ bundle_files.results[0].files[0].path | basename }}"
+
+  always:
+    - name: Delete temp directory
+      ansible.builtin.file:
+        path: "{{ bundle_tmp.path }}"
+        state: absent
+      when: bundle_tmp.path is defined
