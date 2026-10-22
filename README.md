@@ -2,7 +2,7 @@
 
 **GitHub:** https://github.com/ibm-hyper-protect/ccco-provisioner
 
-Ansible automation to install the IBM Confidential Containers for Red Hat OpenShift Container Platform (CCCO) stack on a bare metal OpenShift cluster, generate an encrypted CCCO contract, and produce pod manifests for the **PayNow** and **Busybox** sample workloads.
+Ansible automation to install the IBM Confidential Containers for Red Hat OpenShift Container Platform ([CCCO](https://www.ibm.com/docs/en/rhocp-ibm-z?topic=confidential-computing-containers-red-hat-openshift-container-platform)) stack on a bare metal OpenShift cluster, generate an encrypted CCCO contract, and produce pod manifests for the **PayNow** and **Busybox** sample workloads. The final output is a CCCO-ready cluster plus signed, contract-bound pod manifests that you apply with `oc` to run the workloads as confidential containers.
 
 The stack installed on the cluster is: IBM Secure Execution (SE) → Node Feature Discovery (NFD) → OpenShift Sandboxed Containers (OSC) → KataConfig (`kata-cc` RuntimeClass, handler `kata-se`).
 
@@ -44,22 +44,22 @@ All cluster work runs on a **bastion** host over SSH, using `kubernetes.core` mo
 
 After downloading the IBM CCCO image, push it to a remote registry such as `quay.io` or `icr.io` before deploying. The pushed image reference is what you set as `kata.addon_image` in [step 4](#4-configure-the-inventory). For `icr.io` specifics, see [Getting started with IBM Cloud Container Registry](https://cloud.ibm.com/docs/Registry?topic=Registry-getting-started).
 
-Run the commands for your registry (`quay.io` or `icr.io`):
+First, log in to your registry with `podman login quay.io` or `podman login <region>.icr.io` and enter your credentials at the prompt. See your registry's documentation for how to obtain them (for `icr.io`, the user name is `iamapikey` and the password is an IAM API key).
+
+> **Do not pass the password with `-p` / `--password`.** It is stored in your shell history and is visible to other users in the process list. Use the interactive prompt, or `--password-stdin` with the secret read from a protected source.
+
+Then run the commands for your registry (`quay.io` or `icr.io`):
 
 ```bash
-# 1. Log in
-podman login -u='<user-name>' -p='<password>' quay.io              # quay.io
-podman login -u iamapikey -p <iam_api_key> <region>.icr.io         # icr.io
-
-# 2. Load the image into the local registry, then verify
+# 1. Load the image into the local registry, then verify
 podman load -i images/ibm-confidential-computing-container-v1.2.2.2.tar.gz
 podman images
 
-# 3. Tag the image for your registry
+# 2. Tag the image for your registry
 podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2   # quay.io
 podman tag docker.io/ibm_ccco/ibm-ccco-podvm-container-image:1.2.2.2 icr.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2    # icr.io
 
-# 4. Push the image
+# 3. Push the image
 podman push quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2       # quay.io
 podman push icr.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2        # icr.io
 ```
