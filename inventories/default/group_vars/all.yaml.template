@@ -37,13 +37,9 @@ osc_version: ""                  # OSC CSV version, e.g. v1.7.0
 
 # Section 7 - KataConfig
 kata:
-  addon_image: ""   # e.g. quay.io/ibm_hpcc/ibm-confidential-computing-container:1.2.2.1
-                    # Required unless the IBM fixpack bundle is placed in artifacts/ (Section 9): then the image is pushed
-                    # and its reference is used automatically. That reference only lives for one playbook
-                    # run, so for later standalone runs (e.g. ccco_install_kata.yaml) set it here as well.
+  addon_image: ""   # e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2
   kernel_path: ""   # e.g. /image/ccco-bm-2.0.11.img
-  verify_addon_kernel_service: true   # set to false to skip kata-addon-kernel.service check
-                                      # when addon_image registry is not reachable from worker nodes
+  verify_addon_kernel_service: true   # false = skip kata-addon-kernel.service check (registry unreachable from workers)
 
 # Section 8 - Cluster Auth
 cluster:
