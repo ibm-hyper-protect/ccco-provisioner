@@ -72,7 +72,7 @@
         kind: KataConfig
         name: cluster-kataconfig
       register: kataconfig_gone
-      until: kataconfig_gone.resources | length == 0
+      until: kataconfig_gone is succeeded and kataconfig_gone.resources | length == 0
       retries: 60
       delay: 60
       when: kataconfig_present | bool
@@ -139,6 +139,7 @@
         name: master
       register: mcp_master_kata_wait
       until: >-
+        (mcp_master_kata_wait is succeeded) and
         (mcp_master_kata_wait.resources | length > 0) and
         (mcp_master_kata_wait.resources[0].status.conditions |
           default([]) |
@@ -186,6 +187,7 @@
         name: worker
       register: mcp_worker_kata_wait
       until: >-
+        (mcp_worker_kata_wait is succeeded) and
         (mcp_worker_kata_wait.resources | length > 0) and
         (mcp_worker_kata_wait.resources[0].status.conditions |
           default([]) |

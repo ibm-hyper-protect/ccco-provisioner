@@ -115,6 +115,7 @@
         name: cluster-kataconfig
       register: kata_config_info
       until: >-
+        (kata_config_info is succeeded) and
         (kata_config_info.resources | length > 0) and
         (kata_config_info.resources[0].status.conditions |
           default([]) |
@@ -295,6 +296,7 @@
             namespace: default
           register: svc_pod_status
           until: >-
+            (svc_pod_status is succeeded) and
             (svc_pod_status.resources | length > 0) and
             (svc_pod_status.resources[0].status.phase in ['Succeeded', 'Failed'])
           retries: 12
