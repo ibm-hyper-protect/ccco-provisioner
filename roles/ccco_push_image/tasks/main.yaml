@@ -8,10 +8,10 @@
 #
 # Steps:
 #   1. Validate variables
-#   2. Extract the bundle on the controller (ccco_extract_bundle) -> files land in artifacts/
-#   3. Copy the image tar to the bastion
-#   4. podman login -> load -> tag -> push
-#   5. Cleanup (always): logout, remove temp tarball and local images
+#   2. Extract the bundle on the controller (ccco_extract_bundle) -> image tar lands in artifacts/.staging/
+#   3. Copy the image tar to a temp file on the bastion
+#   4. podman login -> load -> tag -> push (push and verify-pull run async, 1 hour cap)
+#   5. Cleanup (always): logout, remove temp tarball, artifacts/.staging/ and local images
 
 - name: Validate imagepull variables
   ansible.builtin.assert:
@@ -34,14 +34,20 @@
     name: ccco_extract_bundle
 
 - name: Push image to registry
-  vars:
-    remote_tarball: /tmp/ccco-image.tar.gz
   block:
+
+    # Unique, private temp file on the bastion (avoids a fixed, guessable /tmp path).
+    - name: Create temp file for the image tarball on bastion
+      ansible.builtin.tempfile:
+        state: file
+        prefix: ccco-image-
+        suffix: .tar.gz
+      register: bastion_tarball
 
     - name: Copy image tarball to bastion
       ansible.builtin.copy:
         src: "{{ ccco_image_tarball }}"
-        dest: "{{ remote_tarball }}"
+        dest: "{{ bastion_tarball.path }}"
         mode: "0600"
 
     - name: Log in to registry
@@ -55,7 +61,7 @@
       no_log: true
 
     - name: Load image tarball into podman
-      ansible.builtin.command: podman load -i {{ remote_tarball }}
+      ansible.builtin.command: podman load -i {{ bastion_tarball.path }}
       register: podman_load
       changed_when: true
 
@@ -86,15 +92,21 @@
       ansible.builtin.command: podman tag {{ loaded_image_ref }} {{ resolved_addon_image }}
       changed_when: true
 
+    # The image is multi-GB: run push/pull as async tasks so a slow link does not hit the
+    # SSH timeout, and fail after 1 hour instead of hanging forever.
     - name: Push image to registry
       ansible.builtin.command: podman push {{ resolved_addon_image }}
       changed_when: true
+      async: 3600
+      poll: 15
 
     # podman pull forces a real registry round-trip (a local inspect would always pass).
     # The pulled copy is removed in the cleanup below.
     - name: Verify the image is available in the registry
       ansible.builtin.command: podman pull --quiet {{ resolved_addon_image }}
       changed_when: false
+      async: 3600
+      poll: 15
 
     - name: Display pushed image
       ansible.builtin.debug:
@@ -108,13 +120,14 @@
 
     - name: Remove temporary tarball from bastion
       ansible.builtin.file:
-        path: /tmp/ccco-image.tar.gz
+        path: "{{ bastion_tarball.path }}"
         state: absent
+      when: bastion_tarball.path is defined
 
-    # The extracted image tar is also a *.tar.gz; remove it so artifacts/ holds only the bundle.
-    - name: Remove extracted image tar from artifacts/ on the controller
+    # The image tar was extracted into artifacts/.staging/; remove that folder.
+    - name: Remove extracted image tar staging folder from artifacts/ on the controller
       ansible.builtin.file:
-        path: "{{ ccco_image_tarball }}"
+        path: "{{ ccco_image_tarball | dirname }}"
         state: absent
       delegate_to: localhost
       when: ccco_image_tarball is defined

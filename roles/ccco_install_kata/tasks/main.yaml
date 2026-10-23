@@ -273,20 +273,28 @@
                       - bash
                       - "-c"
                       - |
+                        # The service may still be running when this pod starts, so wait
+                        # (up to 300s) instead of failing on the first check.
                         # Current boot only (-b): older boots can hold a stale success line.
-                        if [ ! -f /var/cache/kata-containers/vmlinuz.ibm-se ]; then
-                          echo "FAIL: /var/cache/kata-containers/vmlinuz.ibm-se is missing"
-                          exit 1
-                        fi
-                        if ! journalctl -b -u kata-addon-kernel.service --no-pager | grep -q "Kata addon kernel update complete"; then
-                          echo "FAIL: kata-addon-kernel.service did not complete in the current boot"
-                          exit 1
-                        fi
-                        echo "OK: kernel file present and kata-addon-kernel.service completed in the current boot"
+                        timeout=300
+                        elapsed=0
+                        while [ "$elapsed" -lt "$timeout" ]; do
+                          if [ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && \
+                             journalctl -b -u kata-addon-kernel.service --no-pager | grep -q "Kata addon kernel update complete"; then
+                            echo "OK: kernel file present and kata-addon-kernel.service completed in the current boot"
+                            exit 0
+                          fi
+                          sleep 5
+                          elapsed=$((elapsed + 5))
+                        done
+                        echo "FAIL: after ${timeout}s, vmlinuz.ibm-se is missing or kata-addon-kernel.service did not complete in the current boot"
+                        exit 1
                     securityContext:
                       privileged: true
           loop: "{{ pure_worker_nodes }}"
 
+        # The pod script waits up to 300s; allow 42 x 10s = 420s so the poll outlasts it
+        # (covers the time to pull the image and start the container).
         - name: Wait for each debug Pod to reach Succeeded or Failed
           kubernetes.core.k8s_info:
             kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
@@ -299,7 +307,7 @@
             (svc_pod_status is succeeded) and
             (svc_pod_status.resources | length > 0) and
             (svc_pod_status.resources[0].status.phase in ['Succeeded', 'Failed'])
-          retries: 12
+          retries: 42
           delay: 10
           loop: "{{ pure_worker_nodes }}"
 

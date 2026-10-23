@@ -1,13 +1,15 @@
 ---
 # Role: ccco_extract_bundle
 # Purpose: Extract the IBM fixpack bundle (the one *.tar.gz the user places in artifacts/)
-#          on the controller and keep only what the provisioner needs, placing it in
-#          artifacts/:
-#            - image tar               (images/*.tar.gz)
-#            - sealed secret client    (binary/*-linux-s390x)
-#            - SE header               (se-hdr.bin)
+#          on the controller and keep only what the provisioner needs:
+#            - sealed secret client    (binary/*-linux-s390x)  -> artifacts/
+#            - SE header               (se-hdr.bin)            -> artifacts/
+#            - image tar               (images/*.tar.gz)       -> artifacts/.staging/
+#          The image tar goes to a subfolder so an interrupted run cannot leave a second
+#          *.tar.gz next to the bundle (that would fail the one-bundle check on the next run).
+#          ccco_push_image deletes artifacts/.staging/ when it finishes.
 #          The temp extraction directory is deleted right after the copy.
-#          Sets the fact `ccco_image_tarball` (path of the image tar in artifacts/).
+#          Sets the fact `ccco_image_tarball` (path of the image tar in artifacts/.staging/).
 
 - name: Find the bundle in artifacts/
   ansible.builtin.find:
@@ -56,10 +58,16 @@
       loop_control:
         label: "{{ item.item.pattern }}"
 
-    - name: Copy the files to artifacts/
+    - name: Create staging directory for the image tar
+      ansible.builtin.file:
+        path: "{{ ccco_artifacts_dir }}/.staging"
+        state: directory
+        mode: "0700"
+
+    - name: Copy the files (image tar to artifacts/.staging/, the rest to artifacts/)
       ansible.builtin.copy:
         src: "{{ item.files[0].path }}"
-        dest: "{{ ccco_artifacts_dir }}/"
+        dest: "{{ ccco_artifacts_dir }}/{{ '.staging/' if item.item.dir == 'images' else '' }}"
         remote_src: true
         mode: preserve
       loop: "{{ bundle_files.results }}"
@@ -68,7 +76,7 @@
 
     - name: Set image tarball path
       ansible.builtin.set_fact:
-        ccco_image_tarball: "{{ ccco_artifacts_dir }}/{{ bundle_files.results[0].files[0].path | basename }}"
+        ccco_image_tarball: "{{ ccco_artifacts_dir }}/.staging/{{ bundle_files.results[0].files[0].path | basename }}"
 
   always:
     - name: Delete temp directory
