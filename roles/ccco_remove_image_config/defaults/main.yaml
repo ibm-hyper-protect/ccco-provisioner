@@ -1,0 +1,4 @@
+---
+# Key used in the cluster-wide pull-secret: "<registry>/<namespace>" (or just "<registry>").
+ccco_image_registry_key: >-
+  {{ imagepull.registry_name }}{{ ('/' ~ imagepull.target_namespace) if imagepull.target_namespace | default('', true) | trim != '' else '' }}

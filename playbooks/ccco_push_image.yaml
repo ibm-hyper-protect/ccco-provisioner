@@ -1,0 +1,25 @@
+---
+# Usage: ansible-playbook playbooks/ccco_push_image.yaml
+# Purpose: Extract the IBM bundle, load the CCCO image on the bastion and push it to your registry.
+#          Requires the imagepull section in all.yaml (Section 9 of all.yaml.template).
+
+- name: Generate inventory hosts file from all.yaml
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/default/group_vars/all.yaml"
+  tasks:
+    - name: Set inventory
+      ansible.builtin.import_role:
+        name: ccco_setinventory
+
+- name: Push CCCO image to registry
+  hosts: bastion
+  gather_facts: false
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all.yaml"
+  tasks:
+    - name: Push image
+      ansible.builtin.import_role:
+        name: ccco_push_image

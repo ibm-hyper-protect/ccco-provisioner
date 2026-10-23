@@ -32,6 +32,14 @@
     state: present
     executable: pip3
 
+# The addon image comes from ccco_push_image (resolved_addon_image) or from kata.addon_image.
+- name: Assert an addon image is set
+  ansible.builtin.assert:
+    that: (resolved_addon_image | default(kata.addon_image | default('', true), true) | trim) != ''
+    fail_msg: >-
+      No addon image set. Either set kata.addon_image in all.yaml, or place the IBM fixpack
+      bundle in artifacts/ so ccco_push_image pushes the image and provides resolved_addon_image.
+
 - name: Install KataConfig and Kata runtime
   block:
 
@@ -107,6 +115,7 @@
         name: cluster-kataconfig
       register: kata_config_info
       until: >-
+        (kata_config_info is succeeded) and
         (kata_config_info.resources | length > 0) and
         (kata_config_info.resources[0].status.conditions |
           default([]) |
@@ -264,33 +273,28 @@
                       - bash
                       - "-c"
                       - |
-                        out=$(systemctl show kata-addon-kernel.service \
-                          --property=LoadState \
-                          --property=Result \
-                          --property=ExecMainStatus \
-                          --property=ExecMainExitTimestamp 2>&1)
-                        echo "$out"
-                        load=$(echo "$out" | grep '^LoadState=' | cut -d= -f2)
-                        result=$(echo "$out" | grep '^Result=' | cut -d= -f2)
-                        exit_status=$(echo "$out" | grep '^ExecMainStatus=' | cut -d= -f2)
-                        ts=$(echo "$out" | grep '^ExecMainExitTimestamp=' | cut -d= -f2)
-                        if [ "$load" != "loaded" ]; then
-                          echo "FAIL: kata-addon-kernel.service is not loaded (LoadState=$load) — service may be missing"
-                          exit 1
-                        fi
-                        if [ -z "$ts" ]; then
-                          echo "FAIL: kata-addon-kernel.service has never run (ExecMainExitTimestamp is empty)"
-                          exit 1
-                        fi
-                        if [ "$result" != "success" ] || [ "$exit_status" != "0" ]; then
-                          echo "FAIL: kata-addon-kernel.service Result=$result ExecMainStatus=$exit_status (expected Result=success ExecMainStatus=0)"
-                          exit 1
-                        fi
-                        echo "OK: kata-addon-kernel.service completed successfully (LoadState=loaded Result=success ExecMainStatus=0)"
+                        # The service may still be running when this pod starts, so wait
+                        # (up to 300s) instead of failing on the first check.
+                        # Current boot only (-b): older boots can hold a stale success line.
+                        timeout=300
+                        elapsed=0
+                        while [ "$elapsed" -lt "$timeout" ]; do
+                          if [ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && \
+                             journalctl -b -u kata-addon-kernel.service --no-pager | grep -q "Kata addon kernel update complete"; then
+                            echo "OK: kernel file present and kata-addon-kernel.service completed in the current boot"
+                            exit 0
+                          fi
+                          sleep 5
+                          elapsed=$((elapsed + 5))
+                        done
+                        echo "FAIL: after ${timeout}s, vmlinuz.ibm-se is missing or kata-addon-kernel.service did not complete in the current boot"
+                        exit 1
                     securityContext:
                       privileged: true
           loop: "{{ pure_worker_nodes }}"
 
+        # The pod script waits up to 300s; allow 42 x 10s = 420s so the poll outlasts it
+        # (covers the time to pull the image and start the container).
         - name: Wait for each debug Pod to reach Succeeded or Failed
           kubernetes.core.k8s_info:
             kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
@@ -300,9 +304,10 @@
             namespace: default
           register: svc_pod_status
           until: >-
+            (svc_pod_status is succeeded) and
             (svc_pod_status.resources | length > 0) and
             (svc_pod_status.resources[0].status.phase in ['Succeeded', 'Failed'])
-          retries: 12
+          retries: 42
           delay: 10
           loop: "{{ pure_worker_nodes }}"
 
@@ -315,7 +320,7 @@
               {{ item.resources[0].spec.nodeName | default('unknown') }}
               (pod phase={{ item.resources[0].status.phase }})
             success_msg: >-
-              kata-addon-kernel.service completed successfully (Result=success) on
+              kata-addon-kernel.service completed in the current boot on
               {{ item.resources[0].spec.nodeName | default('unknown') }}
           loop: "{{ svc_pod_status.results }}"
 
@@ -340,6 +345,6 @@
           - "=========================================="
           - "KataConfig installed successfully"
           - "RuntimeClass : kata-cc  (handler=kata-se)"
-          - "Addon image  : {{ kata.addon_image }}"
+          - "Addon image  : {{ resolved_addon_image | default(kata.addon_image) }}"
           - "Kernel path  : {{ kata.kernel_path }}"
           - "=========================================="

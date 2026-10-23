@@ -53,7 +53,7 @@
         name: paynow-ssl
         namespace: "{{ ccco_namespace }}"
       register: paynow_pod_check
-      until: paynow_pod_check.resources | length == 0
+      until: paynow_pod_check is succeeded and paynow_pod_check.resources | length == 0
       retries: 18
       delay: 10
 
@@ -65,7 +65,7 @@
         name: busybox-cc
         namespace: "{{ ccco_namespace }}"
       register: busybox_pod_check
-      until: busybox_pod_check.resources | length == 0
+      until: busybox_pod_check is succeeded and busybox_pod_check.resources | length == 0
       retries: 18
       delay: 10
 

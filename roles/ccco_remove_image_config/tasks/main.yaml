@@ -1,0 +1,105 @@
+---
+# Role: ccco_remove_image_config
+# Purpose: Undo ccco_configure_image. Idempotent — safe to run if nothing was configured.
+#
+# Steps:
+#   1. Delete hyper-protect-pull-secret from the OSC namespace
+#   2. Remove our registry entry from the cluster-wide pull-secret - only if
+#      ccco_configure_image added it (annotation ccco.ibm.com/added-registry-key).
+#      An entry that existed before install is left untouched.
+#   3. If the cluster-wide pull-secret changed, wait for the MachineConfigPools to settle
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Delete hyper-protect-pull-secret from OSC namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: Secret
+    name: hyper-protect-pull-secret
+    namespace: openshift-sandboxed-containers-operator
+    state: absent
+
+- name: Get cluster-wide pull-secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: Secret
+    name: pull-secret
+    namespace: openshift-config
+  register: global_pull_secret
+  no_log: true
+
+- name: Read current cluster-wide pull-secret content
+  ansible.builtin.set_fact:
+    current_dockerconfig: "{{ global_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode | from_json }}"
+    added_registry_key: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') }}"
+  no_log: true
+
+- name: Remove registry entry from cluster-wide pull-secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: pull-secret
+        namespace: openshift-config
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {{ current_dockerconfig
+             | combine({'auths': (current_dockerconfig.auths | default({}, true)) | dict2items | rejectattr('key', 'equalto', ccco_image_registry_key) | items2dict})
+             | to_json | b64encode }}
+  register: global_pull_secret_update
+  when: added_registry_key == ccco_image_registry_key and ccco_image_registry_key in (current_dockerconfig.auths | default({}, true))
+  no_log: true
+
+# Clear the marker so a later install can tell the entry is gone.
+# (A null value removes the annotation key when patching.)
+- name: Remove marker annotation from cluster-wide pull-secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: patched
+    api_version: v1
+    kind: Secret
+    name: pull-secret
+    namespace: openshift-config
+    definition:
+      metadata:
+        annotations:
+          ccco.ibm.com/added-registry-key: null
+  when: added_registry_key == ccco_image_registry_key
+
+- name: Report registry entry left untouched
+  ansible.builtin.debug:
+    msg: >-
+      Entry '{{ ccco_image_registry_key }}' in openshift-config/pull-secret was not added by this
+      automation (or is already gone) - nothing removed.
+  when: added_registry_key != ccco_image_registry_key
+
+- name: Pause 30s for MCO to detect the pull-secret change
+  ansible.builtin.pause:
+    seconds: 30
+  when: global_pull_secret_update is changed
+
+- name: Wait for MachineConfigPools to settle (30 minutes max)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ item }}"
+    wait: true
+    wait_condition:
+      type: Updated
+      status: "True"
+    wait_timeout: 1800
+  loop:
+    - master
+    - worker
+  when: global_pull_secret_update is changed

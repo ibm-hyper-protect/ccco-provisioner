@@ -1,5 +1,5 @@
 ---
 # Defaults for ccco_busybox_deploy
-busybox_image: "busybox:stable"
+busybox_image: "quay.io/prometheus/busybox:latest"
 scripts_dir: "/root/ccco-artifacts"
 ccco_namespace: "default"

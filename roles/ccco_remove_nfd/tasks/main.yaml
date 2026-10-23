@@ -110,7 +110,7 @@
         kind: NodeFeatureDiscovery
         namespace: openshift-nfd
       register: nfd_cr_gone
-      until: nfd_cr_gone.resources | length == 0
+      until: nfd_cr_gone is succeeded and nfd_cr_gone.resources | length == 0
       retries: 18
       delay: 10
       when:
@@ -176,7 +176,7 @@
         kind: Namespace
         name: openshift-nfd
       register: nfd_ns_check
-      until: nfd_ns_check.resources | length == 0
+      until: nfd_ns_check is succeeded and nfd_ns_check.resources | length == 0
       retries: 36
       delay: 10
       when: nfd_installed_csv != ""

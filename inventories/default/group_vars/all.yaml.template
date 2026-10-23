@@ -47,3 +47,10 @@ cluster:
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
   # Example: if your kubeconfig is at /root/auth/kubeconfig, set this to /root/auth
   auth_dir_path: ''  # e.g. /root/auth
+
+# Section 9 - Image Push (used by playbooks/ccco_push_image.yaml)
+imagepull:
+  registry_name: ""     # e.g. quay.io, icr.io, my-registry:5000
+  user_name: ""         # registry username (or 'iamapikey' for ICR)
+  password: ""          # registry password / token / API key
+  target_namespace: ""  # your org/namespace in the registry
