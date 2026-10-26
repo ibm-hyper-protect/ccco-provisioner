@@ -51,7 +51,9 @@
 
 # ServiceAccount.imagePullSecrets has no merge strategy, so a patch REPLACES the whole list.
 # Read the current list and append our secret only if it is missing.
-- name: Get default service account in OSC namespace
+# The default SA is created automatically by the API server when the namespace becomes Active,
+# but there is a short race window. Poll until it appears before indexing resources[0].
+- name: Wait for default service account to exist in OSC namespace
   kubernetes.core.k8s_info:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
     api_version: v1
@@ -59,6 +61,9 @@
     name: default
     namespace: openshift-sandboxed-containers-operator
   register: default_sa
+  until: default_sa.resources | length > 0
+  retries: 12
+  delay: 5
 
 - name: Link pull secret to the default service account (keeping existing secrets)
   kubernetes.core.k8s:
@@ -78,6 +83,13 @@
 # Step 2: Add the registry to the cluster-wide pull-secret (existing entries are kept).
 #         The key we add is recorded in an annotation on the pull-secret, so cleanup
 #         removes only entries we added. An entry that already existed is left untouched.
+#
+# LIMITATION — single annotation value tracks ownership of ONE registry key at a time.
+# If imagepull.registry_name or imagepull.target_namespace changes between runs the
+# annotation is overwritten with the new key and the old auths entry is orphaned:
+# ccco_remove_image_config will remove the new key but leave the old one in pull-secret.
+# If you need to change the registry key, run ccco_cleanup.yaml (or ccco_configure_image.yaml
+# with the OLD values) before switching to the new registry, then re-run with the new values.
 # -----------------------------------------------------------------------
 - name: Get cluster-wide pull-secret
   kubernetes.core.k8s_info:
@@ -93,7 +105,23 @@
   ansible.builtin.set_fact:
     registry_key_exists: "{{ ccco_image_registry_key in (global_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode | from_json).auths | default({}, true) }}"
     registry_key_ours: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') == ccco_image_registry_key }}"
+    previous_registry_key: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') }}"
   no_log: true
+
+# Warn when the annotation already points to a DIFFERENT key from a previous run.
+# The old entry will be orphaned once the annotation is overwritten below.
+- name: Warn if a previous registry key will be orphaned by this run
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: the pull-secret annotation currently records a different registry key"
+      - "  previous key : {{ previous_registry_key }}"
+      - "  new key      : {{ ccco_image_registry_key }}"
+      - "The previous auths entry will NOT be removed by cleanup after this run."
+      - "To avoid orphaned credentials, run ccco_cleanup.yaml with the previous"
+      - "all.yaml values first, then re-run with the new registry settings."
+  when:
+    - previous_registry_key != ''
+    - previous_registry_key != ccco_image_registry_key
 
 - name: Add registry credentials to cluster-wide pull-secret
   kubernetes.core.k8s:
@@ -125,28 +153,62 @@
   when: (registry_key_exists | bool) and not (registry_key_ours | bool)
 
 # -----------------------------------------------------------------------
-# Step 3: Wait for MCO to roll out the new pull-secret (only if it changed)
-#         The pause lets MCO flip the pools to Updating before we start waiting.
+# Step 3: Wait for MCO to roll out the new pull-secret (only if it changed).
+#         Pause 90s first so MCO has time to flip the pool to Updating=True.
+#         A shorter pause risks the Updating=False + Updated=True conditions
+#         already being satisfied from the pre-change steady state, causing the
+#         wait to return immediately before the rollout has started.
+#         Budget: 30 retries × 60s = 30 minutes per pool.
 # -----------------------------------------------------------------------
-- name: Pause 30s for MCO to detect the pull-secret change
+- name: Pause 90s for MCO to detect the pull-secret change and start rolling out
   ansible.builtin.pause:
-    seconds: 30
+    seconds: 90
   when: global_pull_secret_update is changed
 
-- name: Wait for MachineConfigPools to settle (30 minutes max)
+- name: Wait for master MachineConfigPool to settle after pull-secret change
   kubernetes.core.k8s_info:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
     api_version: machineconfiguration.openshift.io/v1
     kind: MachineConfigPool
-    name: "{{ item }}"
-    wait: true
-    wait_condition:
-      type: Updated
-      status: "True"
-    wait_timeout: 1800
-  loop:
-    - master
-    - worker
+    name: master
+  register: mcp_master_ps_wait
+  until: >-
+    (mcp_master_ps_wait is succeeded) and
+    (mcp_master_ps_wait.resources | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
+
+- name: Wait for worker MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker
+  register: mcp_worker_ps_wait
+  until: >-
+    (mcp_worker_ps_wait is succeeded) and
+    (mcp_worker_ps_wait.resources | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
   when: global_pull_secret_update is changed
 
 - name: Display image configuration summary

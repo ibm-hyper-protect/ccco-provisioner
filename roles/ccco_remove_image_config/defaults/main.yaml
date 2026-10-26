@@ -1,4 +1,8 @@
 ---
 # Key used in the cluster-wide pull-secret: "<registry>/<namespace>" (or just "<registry>").
+#
+# NOTE: this expression is intentionally identical to ccco_configure_image/defaults/main.yaml.
+# Ansible role defaults are role-scoped, so the definition must exist in both roles for each
+# to work correctly when run standalone. If you change the formula here, change it there too.
 ccco_image_registry_key: >-
   {{ imagepull.registry_name }}{{ ('/' ~ imagepull.target_namespace) if imagepull.target_namespace | default('', true) | trim != '' else '' }}

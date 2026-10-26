@@ -8,6 +8,12 @@
 #      ccco_configure_image added it (annotation ccco.ibm.com/added-registry-key).
 #      An entry that existed before install is left untouched.
 #   3. If the cluster-wide pull-secret changed, wait for the MachineConfigPools to settle
+#
+# LIMITATION — the annotation stores ONE registry key at a time. If imagepull.registry_name
+# or imagepull.target_namespace was changed between the configure and remove runs, the
+# annotation will not match the key that was originally written, so the old auths entry
+# is left in pull-secret (the guard `added_registry_key == ccco_image_registry_key` is false).
+# Always run this role with the SAME all.yaml values that were used during configure.
 
 - name: Ensure kubernetes Python library is installed on bastion
   ansible.builtin.pip:
@@ -83,23 +89,58 @@
       automation (or is already gone) - nothing removed.
   when: added_registry_key != ccco_image_registry_key
 
-- name: Pause 30s for MCO to detect the pull-secret change
+# Pause 90s first so MCO has time to flip the pool to Updating=True.
+# A shorter pause risks the Updating=False + Updated=True conditions already
+# being satisfied from the pre-change steady state, causing the wait to return
+# immediately before the rollout has started.
+# Budget: 30 retries × 60s = 30 minutes per pool.
+- name: Pause 90s for MCO to detect the pull-secret change and start rolling out
   ansible.builtin.pause:
-    seconds: 30
+    seconds: 90
   when: global_pull_secret_update is changed
 
-- name: Wait for MachineConfigPools to settle (30 minutes max)
+- name: Wait for master MachineConfigPool to settle after pull-secret change
   kubernetes.core.k8s_info:
     kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
     api_version: machineconfiguration.openshift.io/v1
     kind: MachineConfigPool
-    name: "{{ item }}"
-    wait: true
-    wait_condition:
-      type: Updated
-      status: "True"
-    wait_timeout: 1800
-  loop:
-    - master
-    - worker
+    name: master
+  register: mcp_master_ps_wait
+  until: >-
+    (mcp_master_ps_wait is succeeded) and
+    (mcp_master_ps_wait.resources | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
+
+- name: Wait for worker MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker
+  register: mcp_worker_ps_wait
+  until: >-
+    (mcp_worker_ps_wait is succeeded) and
+    (mcp_worker_ps_wait.resources | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
   when: global_pull_secret_update is changed

@@ -37,7 +37,13 @@
       register: bundle_tmp
 
     - name: Extract bundle into temp directory
-      ansible.builtin.command: tar -xzf {{ bundle_found.files[0].path }} -C {{ bundle_tmp.path }}
+      ansible.builtin.command:
+        argv:
+          - tar
+          - -xzf
+          - "{{ bundle_found.files[0].path }}"
+          - -C
+          - "{{ bundle_tmp.path }}"
       changed_when: true
 
     - name: Locate image tar, sealed secret client and SE header

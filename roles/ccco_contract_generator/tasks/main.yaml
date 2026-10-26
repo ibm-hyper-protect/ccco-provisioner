@@ -64,6 +64,24 @@
     msg: "No HKD certificate (HKD*.crt) found in artifacts/."
   when: local_hkd_files.matched == 0
 
+# Each pattern below is read with files[0], so a second match (for example an older client
+# or SE header left from a previous bundle) would be picked silently. Fail instead.
+- name: Assert each artifact pattern matches exactly one file
+  ansible.builtin.assert:
+    that: item.names | length == 1
+    fail_msg: >-
+      Expected exactly one file matching '{{ item.label }}' in artifacts/, found
+      {{ item.names | length }}: {{ item.names | join(', ') }}.
+      Remove the extra file(s) and re-run.
+    quiet: true
+  loop:
+    - { label: "*.crt (contract encryption key, excluding HKD*)", names: "{{ local_contract_key_files.files | map(attribute='path') | map('basename') | list }}" }
+    - { label: "*.bin (SE header)", names: "{{ local_se_header_files.files | map(attribute='path') | map('basename') | list }}" }
+    - { label: "ibm-ccco-sealed-secret-creator-client-*", names: "{{ local_sealed_client_files.files | map(attribute='path') | map('basename') | list }}" }
+    - { label: "HKD*.crt (Host Key Document)", names: "{{ local_hkd_files.files | map(attribute='path') | map('basename') | list }}" }
+  loop_control:
+    label: "{{ item.label }}"
+
 - name: Set artifact filename facts
   ansible.builtin.set_fact:
     artifact_contract_key: "{{ local_contract_key_files.files[0].path | basename }}"

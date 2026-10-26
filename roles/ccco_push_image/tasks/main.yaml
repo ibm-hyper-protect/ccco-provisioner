@@ -11,7 +11,8 @@
 #   2. Extract the bundle on the controller (ccco_extract_bundle) -> image tar lands in artifacts/.staging/
 #   3. Copy the image tar to a temp file on the bastion
 #   4. podman login -> load -> tag -> push (push and verify-pull run async, 1 hour cap)
-#   5. Cleanup (always): logout, remove temp tarball, artifacts/.staging/ and local images
+#   5. Cleanup (always): logout, remove temp tarball, artifacts/.staging/,
+#      and ONLY the local images that this run created (pre-existing copies are preserved).
 
 - name: Validate imagepull variables
   ansible.builtin.assert:
@@ -60,6 +61,11 @@
       changed_when: false
       no_log: true
 
+    # Record whether loaded_image_ref already exists in the local store BEFORE we load
+    # the tarball. The cleanup block uses this to avoid removing images the user already
+    # had on the bastion under the same tag.
+    # loaded_image_ref is not set yet at this point; the check is deferred to after the
+    # load step where the reference is known — see "Check if loaded_image_ref …" below.
     - name: Load image tarball into podman
       ansible.builtin.command: podman load -i {{ bastion_tarball.path }}
       register: podman_load
@@ -82,11 +88,27 @@
              | regex_replace('^Loaded image[^:]*:\s*', '')
              | trim }}
 
+    # Check whether the image was already present BEFORE this run loaded the tarball.
+    # podman image exists exits 0 when found, 1 when absent.
+    # rc != 0 means this run is the one that created it and cleanup should remove it.
+    - name: Check if loaded_image_ref existed in podman store before this run
+      ansible.builtin.command: podman image exists {{ loaded_image_ref }}
+      register: loaded_ref_preexists
+      changed_when: false
+      failed_when: false
+
     # Keep only "<name>:<tag>" and place it under <registry>/<namespace>/
     - name: Build target image reference
       ansible.builtin.set_fact:
         resolved_addon_image: >-
           {{ imagepull.registry_name }}/{{ imagepull.target_namespace }}/{{ loaded_image_ref | regex_replace('^.*/', '') }}
+
+    # Check whether the target tag already existed before this run creates it.
+    - name: Check if resolved_addon_image existed in podman store before this run
+      ansible.builtin.command: podman image exists {{ resolved_addon_image }}
+      register: target_ref_preexists
+      changed_when: false
+      failed_when: false
 
     - name: Tag image for the target registry
       ansible.builtin.command: podman tag {{ loaded_image_ref }} {{ resolved_addon_image }}
@@ -108,9 +130,17 @@
       async: 3600
       poll: 15
 
-    - name: Display pushed image
+    - name: Display pushed image and next-step instruction
       ansible.builtin.debug:
-        msg: "Image pushed: {{ resolved_addon_image }}"
+        msg:
+          - "Image pushed: {{ resolved_addon_image }}"
+          - ""
+          - "ACTION REQUIRED — set kata.addon_image in inventories/default/group_vars/all.yaml:"
+          - "  kata:"
+          - "    addon_image: \"{{ resolved_addon_image }}\""
+          - ""
+          - "Then run: ansible-playbook playbooks/ccco_install_kata.yaml"
+          - "(or ccco_install_cluster.yaml if SE / NFD / OSC are not yet installed)"
 
   always:
     - name: Log out from registry
@@ -132,8 +162,22 @@
       delegate_to: localhost
       when: ccco_image_tarball is defined
 
-    - name: Remove local images from podman store
-      ansible.builtin.shell: |
-        podman rmi -f {{ loaded_image_ref | default('', true) }} {{ resolved_addon_image | default('', true) }} || true
+    # Remove only images that this run introduced.
+    # An image is removed only when the reference is defined (the run reached that step)
+    # AND it did not already exist in the local store before this run began (rc != 0).
+    # This preserves any pre-existing copy the user had under the same tag.
+    - name: Remove loaded_image_ref from podman store (only if this run created it)
+      ansible.builtin.command: podman rmi -f {{ loaded_image_ref }}
       changed_when: false
-      when: loaded_image_ref is defined
+      failed_when: false
+      when:
+        - loaded_image_ref is defined
+        - loaded_ref_preexists.rc | default(1) != 0
+
+    - name: Remove resolved_addon_image from podman store (only if this run created it)
+      ansible.builtin.command: podman rmi -f {{ resolved_addon_image }}
+      changed_when: false
+      failed_when: false
+      when:
+        - resolved_addon_image is defined
+        - target_ref_preexists.rc | default(1) != 0
