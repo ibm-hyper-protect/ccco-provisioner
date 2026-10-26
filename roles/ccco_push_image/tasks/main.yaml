@@ -127,17 +127,24 @@
       async: 3600
       poll: 15
 
-    - name: Display pushed image and next-step instruction
+    - name: Display pushed image
+      ansible.builtin.debug:
+        msg: "Image pushed: {{ resolved_addon_image }}"
+
+    # When running standalone (ccco_push_image.yaml), resolved_addon_image is a play fact
+    # that is lost after the run. Remind the operator to persist it in all.yaml.
+    # When called from ccco_install_cluster.yaml, the fact stays alive for ccco_install_kata
+    # so no manual step is needed (ccco_push_image_standalone=false suppresses this message).
+    - name: Print next-step instruction for standalone runs
       ansible.builtin.debug:
         msg:
-          - "Image pushed: {{ resolved_addon_image }}"
-          - ""
           - "ACTION REQUIRED — set kata.addon_image in inventories/default/group_vars/all.yaml:"
           - "  kata:"
           - "    addon_image: \"{{ resolved_addon_image }}\""
           - ""
           - "Then run: ansible-playbook playbooks/ccco_install_kata.yaml"
           - "(or ccco_install_cluster.yaml if SE / NFD / OSC are not yet installed)"
+      when: ccco_push_image_standalone | default(true) | bool
 
   always:
     - name: Log out from registry

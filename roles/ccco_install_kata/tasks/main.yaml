@@ -37,8 +37,8 @@
   ansible.builtin.assert:
     that: (resolved_addon_image | default(kata.addon_image | default('', true), true) | trim) != ''
     fail_msg: >-
-      No addon image set. Either set kata.addon_image in all.yaml, or place the IBM fixpack
-      bundle in artifacts/ so ccco_push_image pushes the image and provides resolved_addon_image.
+      No addon image set. Set kata.addon_image in all.yaml
+      (e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2).
 
 - name: Install KataConfig and Kata runtime
   block:

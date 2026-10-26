@@ -62,6 +62,8 @@
     # - name: Push CCCO image to registry
     #   ansible.builtin.include_role:
     #     name: ccco_push_image
+    #   vars:
+    #     ccco_push_image_standalone: false
     #   when:
     #     - imagepull is defined and imagepull.registry_name | default('', true) | trim != ''
     #     - lookup('ansible.builtin.fileglob', playbook_dir ~ '/../artifacts/*.tar.gz', wantlist=True) | length > 0
