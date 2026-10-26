@@ -61,7 +61,7 @@
     name: default
     namespace: openshift-sandboxed-containers-operator
   register: default_sa
-  until: default_sa.resources | length > 0
+  until: (default_sa is succeeded) and (default_sa.resources | length > 0)
   retries: 12
   delay: 5
 
@@ -88,8 +88,10 @@
 # If imagepull.registry_name or imagepull.target_namespace changes between runs the
 # annotation is overwritten with the new key and the old auths entry is orphaned:
 # ccco_remove_image_config will remove the new key but leave the old one in pull-secret.
-# If you need to change the registry key, run ccco_cleanup.yaml (or ccco_configure_image.yaml
-# with the OLD values) before switching to the new registry, then re-run with the new values.
+# If you need to change the registry key, run ccco_cleanup.yaml first (which calls
+# ccco_remove_image_config with the current all.yaml values), then update all.yaml
+# to the new registry and re-run. Do NOT re-run ccco_configure_image with the old values
+# to remove — it adds entries, it does not remove them.
 # -----------------------------------------------------------------------
 - name: Get cluster-wide pull-secret
   kubernetes.core.k8s_info:
@@ -108,20 +110,23 @@
     previous_registry_key: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') }}"
   no_log: true
 
-# Warn when the annotation already points to a DIFFERENT key from a previous run.
-# The old entry will be orphaned once the annotation is overwritten below.
-- name: Warn if a previous registry key will be orphaned by this run
-  ansible.builtin.debug:
+# Fail when the annotation already points to a DIFFERENT key from a previous run.
+# Proceeding would orphan the old auths entry — cleanup would remove the new key
+# but never the old one. Force the operator to clean up first.
+# Set ccco_image_force_registry_change=true to override and accept the orphaned entry.
+- name: Fail if a previous registry key would be orphaned by this run
+  ansible.builtin.fail:
     msg:
-      - "WARNING: the pull-secret annotation currently records a different registry key"
+      - "FAIL: the pull-secret annotation records a different registry key from a previous run."
       - "  previous key : {{ previous_registry_key }}"
       - "  new key      : {{ ccco_image_registry_key }}"
-      - "The previous auths entry will NOT be removed by cleanup after this run."
-      - "To avoid orphaned credentials, run ccco_cleanup.yaml with the previous"
-      - "all.yaml values first, then re-run with the new registry settings."
+      - "Proceeding would orphan the previous auths entry — cleanup would never remove it."
+      - "To fix: run ccco_cleanup.yaml first, then re-run with the new registry settings."
+      - "To override and accept the orphaned entry, set ccco_image_force_registry_change=true."
   when:
     - previous_registry_key != ''
     - previous_registry_key != ccco_image_registry_key
+    - not (ccco_image_force_registry_change | default(false) | bool)
 
 - name: Add registry credentials to cluster-wide pull-secret
   kubernetes.core.k8s:

@@ -53,21 +53,14 @@ cluster:
 # both this section and those two tasks.
 #
 # SECURITY NOTES:
-#   password    — do NOT store the push credential in plaintext. Use ansible-vault:
-#                   ansible-vault encrypt_string 'mysecret' --name 'password'
-#                 or inject at runtime:
-#                   password: "{{ lookup('env', 'REGISTRY_PASSWORD') }}"
-#                 The push credential (user_name / password) is used only by ccco_push_image
-#                 on the bastion and is never written to the cluster.
-#
-#   pull secret — ccco_configure_image writes these same credentials into the cluster-wide
-#                 openshift-config/pull-secret, making them available to every node and
-#                 namespace. Use a SEPARATE read-only pull credential here, not the same
-#                 push-capable token. Most registries (quay.io, icr.io) support robot
-#                 accounts or service IDs with pull-only permissions.
+#   password   — do NOT store in plaintext. Use ansible-vault or an env var:
+#                  password: "{{ lookup('env', 'REGISTRY_PASSWORD') }}"
+#   pull-secret — ccco_configure_image writes user_name/password into the cluster-wide
+#                 openshift-config/pull-secret. Use a read-only robot account / service ID
+#                 rather than a push-capable credential.
 #
 # imagepull:
 #   registry_name: ""     # e.g. quay.io, icr.io, my-registry:5000
-#   user_name: ""         # registry username (or 'iamapikey' for ICR)
+#   user_name: ""         # registry username
 #   password: ""          # registry password / token / API key — see SECURITY NOTES above
 #   target_namespace: ""  # your org/namespace in the registry

@@ -61,11 +61,13 @@
       changed_when: false
       no_log: true
 
-    # Record whether loaded_image_ref already exists in the local store BEFORE we load
-    # the tarball. The cleanup block uses this to avoid removing images the user already
-    # had on the bastion under the same tag.
-    # loaded_image_ref is not set yet at this point; the check is deferred to after the
-    # load step where the reference is known — see "Check if loaded_image_ref …" below.
+    # Snapshot all image IDs present BEFORE the load so cleanup can remove only
+    # the IDs that this run introduced (preserving any pre-existing images).
+    - name: Record image IDs present before load
+      ansible.builtin.command: podman images -q
+      register: images_before_load
+      changed_when: false
+
     - name: Load image tarball into podman
       ansible.builtin.command: podman load -i {{ bastion_tarball.path }}
       register: podman_load
@@ -88,27 +90,22 @@
              | regex_replace('^Loaded image[^:]*:\s*', '')
              | trim }}
 
-    # Check whether the image was already present BEFORE this run loaded the tarball.
-    # podman image exists exits 0 when found, 1 when absent.
-    # rc != 0 means this run is the one that created it and cleanup should remove it.
-    - name: Check if loaded_image_ref existed in podman store before this run
-      ansible.builtin.command: podman image exists {{ loaded_image_ref }}
-      register: loaded_ref_preexists
+    # Snapshot IDs after load; diff gives the IDs introduced by this run.
+    - name: Record image IDs present after load
+      ansible.builtin.command: podman images -q
+      register: images_after_load
       changed_when: false
-      failed_when: false
+
+    - name: Compute new image IDs introduced by this run
+      ansible.builtin.set_fact:
+        new_image_ids: >-
+          {{ images_after_load.stdout_lines | difference(images_before_load.stdout_lines) }}
 
     # Keep only "<name>:<tag>" and place it under <registry>/<namespace>/
     - name: Build target image reference
       ansible.builtin.set_fact:
         resolved_addon_image: >-
           {{ imagepull.registry_name }}/{{ imagepull.target_namespace }}/{{ loaded_image_ref | regex_replace('^.*/', '') }}
-
-    # Check whether the target tag already existed before this run creates it.
-    - name: Check if resolved_addon_image existed in podman store before this run
-      ansible.builtin.command: podman image exists {{ resolved_addon_image }}
-      register: target_ref_preexists
-      changed_when: false
-      failed_when: false
 
     - name: Tag image for the target registry
       ansible.builtin.command: podman tag {{ loaded_image_ref }} {{ resolved_addon_image }}
@@ -162,22 +159,11 @@
       delegate_to: localhost
       when: ccco_image_tarball is defined
 
-    # Remove only images that this run introduced.
-    # An image is removed only when the reference is defined (the run reached that step)
-    # AND it did not already exist in the local store before this run began (rc != 0).
-    # This preserves any pre-existing copy the user had under the same tag.
-    - name: Remove loaded_image_ref from podman store (only if this run created it)
-      ansible.builtin.command: podman rmi -f {{ loaded_image_ref }}
+    # Remove only the image IDs that were introduced by this run (pre-load snapshot diff).
+    # The tagged resolved_addon_image shares the same layers so removing the loaded ID
+    # also cleans up the tag; rmi -f handles both in one pass.
+    - name: Remove images introduced by this run from podman store
+      ansible.builtin.command: podman rmi -f {{ new_image_ids | join(' ') }}
       changed_when: false
       failed_when: false
-      when:
-        - loaded_image_ref is defined
-        - loaded_ref_preexists.rc | default(1) != 0
-
-    - name: Remove resolved_addon_image from podman store (only if this run created it)
-      ansible.builtin.command: podman rmi -f {{ resolved_addon_image }}
-      changed_when: false
-      failed_when: false
-      when:
-        - resolved_addon_image is defined
-        - target_ref_preexists.rc | default(1) != 0
+      when: new_image_ids | default([]) | length > 0

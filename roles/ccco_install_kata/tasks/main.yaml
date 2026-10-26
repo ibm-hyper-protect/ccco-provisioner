@@ -273,21 +273,33 @@
                       - bash
                       - "-c"
                       - |
-                        # The service may still be running when this pod starts, so wait
-                        # (up to 300s) instead of failing on the first check.
-                        # Current boot only (-b): older boots can hold a stale success line.
+                        # Wait up to 300s for kata-addon-kernel.service to leave activating state,
+                        # then check Result=success and ExecMainStatus=0 (authoritative unit outcome)
+                        # plus the vmlinuz.ibm-se kernel file produced by the service.
+                        # Using systemctl show avoids depending on a literal log string that could
+                        # change between IBM image versions.
                         timeout=300
                         elapsed=0
                         while [ "$elapsed" -lt "$timeout" ]; do
-                          if [ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && \
-                             journalctl -b -u kata-addon-kernel.service --no-pager | grep -q "Kata addon kernel update complete"; then
-                            echo "OK: kernel file present and kata-addon-kernel.service completed in the current boot"
-                            exit 0
+                          active=$(systemctl show kata-addon-kernel.service --property=ActiveState --value 2>/dev/null)
+                          if [ "$active" != "activating" ]; then
+                            break
                           fi
                           sleep 5
                           elapsed=$((elapsed + 5))
                         done
-                        echo "FAIL: after ${timeout}s, vmlinuz.ibm-se is missing or kata-addon-kernel.service did not complete in the current boot"
+
+                        active=$(systemctl show kata-addon-kernel.service --property=ActiveState   --value 2>/dev/null)
+                        result=$(systemctl show kata-addon-kernel.service --property=Result        --value 2>/dev/null)
+                        exec_status=$(systemctl show kata-addon-kernel.service --property=ExecMainStatus --value 2>/dev/null)
+
+                        if [ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && \
+                           [ "$result" = "success" ] && \
+                           [ "$exec_status" = "0" ]; then
+                          echo "OK: vmlinuz.ibm-se present, ActiveState=$active, Result=$result, ExecMainStatus=$exec_status"
+                          exit 0
+                        fi
+                        echo "FAIL: vmlinuz.ibm-se=$([ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && echo present || echo missing) ActiveState=$active Result=$result ExecMainStatus=$exec_status"
                         exit 1
                     securityContext:
                       privileged: true
