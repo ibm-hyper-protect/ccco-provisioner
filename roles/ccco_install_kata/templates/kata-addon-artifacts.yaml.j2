@@ -4,5 +4,5 @@ metadata:
   name: kata-addon-artifacts
   namespace: openshift-sandboxed-containers-operator
 data:
-  addonImage: "{{ kata.addon_image }}"
+  addonImage: "{{ resolved_addon_image | default(kata.addon_image) }}"
   kernelPath: "{{ kata.kernel_path }}"

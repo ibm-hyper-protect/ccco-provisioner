@@ -1,0 +1,223 @@
+---
+# Role: ccco_configure_image
+# Purpose: Let the cluster pull the CCCO addon image from the registry.
+#          Run after ccco_install_osc (needs the OSC namespace) and before ccco_install_kata.
+#
+# Steps:
+#   1. Create hyper-protect-pull-secret in the OSC namespace and link it to the default SA
+#   2. Add the registry credentials to the cluster-wide pull-secret
+#      (kata-addon-kernel.service runs on the host and uses this one)
+#   3. If the cluster-wide pull-secret changed, wait for the MachineConfigPools to settle
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Assert registry variables are set
+  ansible.builtin.assert:
+    that:
+      - imagepull is defined
+      - imagepull.registry_name | default('', true) | trim != ''
+      - imagepull.user_name | default('', true) | trim != ''
+      - imagepull.password | default('', true) | trim != ''
+    fail_msg: >-
+      Set imagepull.registry_name, user_name and password in all.yaml
+      (see all.yaml.template, Section 9). target_namespace is optional here.
+
+- name: Build registry auth token
+  ansible.builtin.set_fact:
+    registry_auth: "{{ (imagepull.user_name ~ ':' ~ imagepull.password) | b64encode }}"
+  no_log: true
+
+# -----------------------------------------------------------------------
+# Step 1: Pull secret in the OSC namespace
+# -----------------------------------------------------------------------
+- name: Create hyper-protect-pull-secret in OSC namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: hyper-protect-pull-secret
+        namespace: openshift-sandboxed-containers-operator
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ {'auths': {imagepull.registry_name: {'auth': registry_auth}}} | to_json | b64encode }}"
+  no_log: true
+
+# ServiceAccount.imagePullSecrets has no merge strategy, so a patch REPLACES the whole list.
+# Read the current list and append our secret only if it is missing.
+# The default SA is created automatically by the API server when the namespace becomes Active,
+# but there is a short race window. Poll until it appears before indexing resources[0].
+- name: Wait for default service account to exist in OSC namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: ServiceAccount
+    name: default
+    namespace: openshift-sandboxed-containers-operator
+  register: default_sa
+  until: (default_sa is succeeded) and (default_sa.resources | length > 0)
+  retries: 12
+  delay: 5
+
+- name: Link pull secret to the default service account (keeping existing secrets)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: patched
+    api_version: v1
+    kind: ServiceAccount
+    name: default
+    namespace: openshift-sandboxed-containers-operator
+    definition:
+      imagePullSecrets: "{{ current_pull_secrets + [{'name': 'hyper-protect-pull-secret'}] }}"
+  vars:
+    current_pull_secrets: "{{ default_sa.resources[0].imagePullSecrets | default([], true) }}"
+  when: "'hyper-protect-pull-secret' not in (default_sa.resources[0].imagePullSecrets | default([], true) | map(attribute='name') | list)"
+
+# -----------------------------------------------------------------------
+# Step 2: Add the registry to the cluster-wide pull-secret (existing entries are kept).
+#         The key we add is recorded in an annotation on the pull-secret, so cleanup
+#         removes only entries we added. An entry that already existed is left untouched.
+#
+# LIMITATION — single annotation value tracks ownership of ONE registry key at a time.
+# If imagepull.registry_name or imagepull.target_namespace changes between runs the
+# annotation is overwritten with the new key and the old auths entry is orphaned:
+# ccco_remove_image_config will remove the new key but leave the old one in pull-secret.
+# If you need to change the registry key, run ccco_cleanup.yaml first (which calls
+# ccco_remove_image_config with the current all.yaml values), then update all.yaml
+# to the new registry and re-run. Do NOT re-run ccco_configure_image with the old values
+# to remove — it adds entries, it does not remove them.
+# -----------------------------------------------------------------------
+- name: Get cluster-wide pull-secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: Secret
+    name: pull-secret
+    namespace: openshift-config
+  register: global_pull_secret
+  no_log: true
+
+- name: Check if the registry entry already exists and who added it
+  ansible.builtin.set_fact:
+    registry_key_exists: "{{ ccco_image_registry_key in (global_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode | from_json).auths | default({}, true) }}"
+    registry_key_ours: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') == ccco_image_registry_key }}"
+    previous_registry_key: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') }}"
+  no_log: true
+
+# Fail when the annotation already points to a DIFFERENT key from a previous run.
+# Proceeding would orphan the old auths entry — cleanup would remove the new key
+# but never the old one. Force the operator to clean up first.
+# Set ccco_image_force_registry_change=true to override and accept the orphaned entry.
+- name: Fail if a previous registry key would be orphaned by this run
+  ansible.builtin.fail:
+    msg:
+      - "FAIL: the pull-secret annotation records a different registry key from a previous run."
+      - "  previous key : {{ previous_registry_key }}"
+      - "  new key      : {{ ccco_image_registry_key }}"
+      - "Proceeding would orphan the previous auths entry — cleanup would never remove it."
+      - "To fix: run ccco_cleanup.yaml first, then re-run with the new registry settings."
+      - "To override and accept the orphaned entry, set ccco_image_force_registry_change=true."
+  when:
+    - previous_registry_key != ''
+    - previous_registry_key != ccco_image_registry_key
+    - not (ccco_image_force_registry_change | default(false) | bool)
+
+- name: Add registry credentials to cluster-wide pull-secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: pull-secret
+        namespace: openshift-config
+        annotations:
+          ccco.ibm.com/added-registry-key: "{{ ccco_image_registry_key }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {{ global_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode | from_json
+             | combine({'auths': {ccco_image_registry_key: {'auth': registry_auth}}}, recursive=True)
+             | to_json | b64encode }}
+  register: global_pull_secret_update
+  when: not (registry_key_exists | bool) or (registry_key_ours | bool)
+  no_log: true
+
+- name: Report registry entry that already existed
+  ansible.builtin.debug:
+    msg: >-
+      Entry '{{ ccco_image_registry_key }}' already exists in openshift-config/pull-secret
+      and was not added by this automation - left untouched (it will not be removed on cleanup).
+  when: (registry_key_exists | bool) and not (registry_key_ours | bool)
+
+# -----------------------------------------------------------------------
+# Step 3: Wait for MCO to roll out the new pull-secret (only if it changed).
+#         Pause 90s first so MCO has time to flip the pool to Updating=True.
+#         A shorter pause risks the Updating=False + Updated=True conditions
+#         already being satisfied from the pre-change steady state, causing the
+#         wait to return immediately before the rollout has started.
+#         Budget: 30 retries × 60s = 30 minutes per pool.
+# -----------------------------------------------------------------------
+- name: Pause 90s for MCO to detect the pull-secret change and start rolling out
+  ansible.builtin.pause:
+    seconds: 90
+  when: global_pull_secret_update is changed
+
+- name: Wait for master MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: master
+  register: mcp_master_ps_wait
+  until: >-
+    (mcp_master_ps_wait is succeeded) and
+    (mcp_master_ps_wait.resources | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
+
+- name: Wait for worker MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker
+  register: mcp_worker_ps_wait
+  until: >-
+    (mcp_worker_ps_wait is succeeded) and
+    (mcp_worker_ps_wait.resources | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
+
+- name: Display image configuration summary
+  ansible.builtin.debug:
+    msg:
+      - "Pull secret   : hyper-protect-pull-secret (openshift-sandboxed-containers-operator)"
+      - "Global secret : {{ ccco_image_registry_key }} {{ 'added' if global_pull_secret_update is changed else 'unchanged' }}"

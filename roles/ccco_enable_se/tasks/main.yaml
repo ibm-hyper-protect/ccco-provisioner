@@ -96,6 +96,7 @@
         name: master
       register: mcp_master_info
       until: >-
+        (mcp_master_info is succeeded) and
         (mcp_master_info.resources | length > 0) and
         (mcp_master_info.resources[0].status.conditions |
           selectattr('type', 'equalto', 'Updated') |
@@ -127,6 +128,7 @@
         name: worker
       register: mcp_worker_info
       until: >-
+        (mcp_worker_info is succeeded) and
         (mcp_worker_info.resources | length > 0) and
         (mcp_worker_info.resources[0].status.conditions |
           selectattr('type', 'equalto', 'Updated') |

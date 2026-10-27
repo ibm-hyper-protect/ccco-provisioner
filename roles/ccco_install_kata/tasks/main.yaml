@@ -32,6 +32,14 @@
     state: present
     executable: pip3
 
+# The addon image comes from ccco_push_image (resolved_addon_image) or from kata.addon_image.
+- name: Assert an addon image is set
+  ansible.builtin.assert:
+    that: (resolved_addon_image | default(kata.addon_image | default('', true), true) | trim) != ''
+    fail_msg: >-
+      No addon image set. Set kata.addon_image in all.yaml
+      (e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2).
+
 - name: Install KataConfig and Kata runtime
   block:
 
@@ -107,6 +115,7 @@
         name: cluster-kataconfig
       register: kata_config_info
       until: >-
+        (kata_config_info is succeeded) and
         (kata_config_info.resources | length > 0) and
         (kata_config_info.resources[0].status.conditions |
           default([]) |
@@ -264,33 +273,40 @@
                       - bash
                       - "-c"
                       - |
-                        out=$(systemctl show kata-addon-kernel.service \
-                          --property=LoadState \
-                          --property=Result \
-                          --property=ExecMainStatus \
-                          --property=ExecMainExitTimestamp 2>&1)
-                        echo "$out"
-                        load=$(echo "$out" | grep '^LoadState=' | cut -d= -f2)
-                        result=$(echo "$out" | grep '^Result=' | cut -d= -f2)
-                        exit_status=$(echo "$out" | grep '^ExecMainStatus=' | cut -d= -f2)
-                        ts=$(echo "$out" | grep '^ExecMainExitTimestamp=' | cut -d= -f2)
-                        if [ "$load" != "loaded" ]; then
-                          echo "FAIL: kata-addon-kernel.service is not loaded (LoadState=$load) — service may be missing"
-                          exit 1
+                        # Wait up to 300s for kata-addon-kernel.service to leave activating state,
+                        # then check Result=success and ExecMainStatus=0 (authoritative unit outcome)
+                        # plus the vmlinuz.ibm-se kernel file produced by the service.
+                        # Using systemctl show avoids depending on a literal log string that could
+                        # change between IBM image versions.
+                        timeout=300
+                        elapsed=0
+                        while [ "$elapsed" -lt "$timeout" ]; do
+                          active=$(systemctl show kata-addon-kernel.service --property=ActiveState --value 2>/dev/null)
+                          if [ "$active" != "activating" ]; then
+                            break
+                          fi
+                          sleep 5
+                          elapsed=$((elapsed + 5))
+                        done
+
+                        active=$(systemctl show kata-addon-kernel.service --property=ActiveState   --value 2>/dev/null)
+                        result=$(systemctl show kata-addon-kernel.service --property=Result        --value 2>/dev/null)
+                        exec_status=$(systemctl show kata-addon-kernel.service --property=ExecMainStatus --value 2>/dev/null)
+
+                        if [ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && \
+                           [ "$result" = "success" ] && \
+                           [ "$exec_status" = "0" ]; then
+                          echo "OK: vmlinuz.ibm-se present, ActiveState=$active, Result=$result, ExecMainStatus=$exec_status"
+                          exit 0
                         fi
-                        if [ -z "$ts" ]; then
-                          echo "FAIL: kata-addon-kernel.service has never run (ExecMainExitTimestamp is empty)"
-                          exit 1
-                        fi
-                        if [ "$result" != "success" ] || [ "$exit_status" != "0" ]; then
-                          echo "FAIL: kata-addon-kernel.service Result=$result ExecMainStatus=$exit_status (expected Result=success ExecMainStatus=0)"
-                          exit 1
-                        fi
-                        echo "OK: kata-addon-kernel.service completed successfully (LoadState=loaded Result=success ExecMainStatus=0)"
+                        echo "FAIL: vmlinuz.ibm-se=$([ -f /var/cache/kata-containers/vmlinuz.ibm-se ] && echo present || echo missing) ActiveState=$active Result=$result ExecMainStatus=$exec_status"
+                        exit 1
                     securityContext:
                       privileged: true
           loop: "{{ pure_worker_nodes }}"
 
+        # The pod script waits up to 300s; allow 42 x 10s = 420s so the poll outlasts it
+        # (covers the time to pull the image and start the container).
         - name: Wait for each debug Pod to reach Succeeded or Failed
           kubernetes.core.k8s_info:
             kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
@@ -300,9 +316,10 @@
             namespace: default
           register: svc_pod_status
           until: >-
+            (svc_pod_status is succeeded) and
             (svc_pod_status.resources | length > 0) and
             (svc_pod_status.resources[0].status.phase in ['Succeeded', 'Failed'])
-          retries: 12
+          retries: 42
           delay: 10
           loop: "{{ pure_worker_nodes }}"
 
@@ -315,7 +332,7 @@
               {{ item.resources[0].spec.nodeName | default('unknown') }}
               (pod phase={{ item.resources[0].status.phase }})
             success_msg: >-
-              kata-addon-kernel.service completed successfully (Result=success) on
+              kata-addon-kernel.service completed in the current boot on
               {{ item.resources[0].spec.nodeName | default('unknown') }}
           loop: "{{ svc_pod_status.results }}"
 
@@ -340,6 +357,6 @@
           - "=========================================="
           - "KataConfig installed successfully"
           - "RuntimeClass : kata-cc  (handler=kata-se)"
-          - "Addon image  : {{ kata.addon_image }}"
+          - "Addon image  : {{ resolved_addon_image | default(kata.addon_image) }}"
           - "Kernel path  : {{ kata.kernel_path }}"
           - "=========================================="

@@ -1,5 +1,9 @@
 ---
 # Defaults for ccco_busybox_deploy
-busybox_image: "busybox:stable"
+# Image changed from busybox:stable (Docker Hub) to quay.io/prometheus/busybox to avoid
+# Docker Hub pull-rate limits on cluster nodes. Pinned to :latest tag pending a digest pin —
+# replace with a @sha256:... digest once the target digest is confirmed, e.g.:
+#   quay.io/prometheus/busybox@sha256:<digest>
+busybox_image: "quay.io/prometheus/busybox:latest"
 scripts_dir: "/root/ccco-artifacts"
 ccco_namespace: "default"

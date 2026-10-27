@@ -103,6 +103,7 @@
         name: master
       register: mcp_master_se_wait
       until: >-
+        (mcp_master_se_wait is succeeded) and
         (mcp_master_se_wait.resources | length > 0) and
         (mcp_master_se_wait.resources[0].status.conditions |
           default([]) |
@@ -151,6 +152,7 @@
         name: worker
       register: mcp_worker_se_wait
       until: >-
+        (mcp_worker_se_wait is succeeded) and
         (mcp_worker_se_wait.resources | length > 0) and
         (mcp_worker_se_wait.resources[0].status.conditions |
           default([]) |

@@ -109,7 +109,7 @@
         kind: Namespace
         name: openshift-sandboxed-containers-operator
       register: osc_ns_check
-      until: osc_ns_check.resources | length == 0
+      until: osc_ns_check is succeeded and osc_ns_check.resources | length == 0
       retries: 18
       delay: 10
       when: osc_installed_csv != ""

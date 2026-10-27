@@ -37,7 +37,7 @@ osc_version: ""                  # OSC CSV version, e.g. v1.7.0
 
 # Section 7 - KataConfig
 kata:
-  addon_image: ""   # e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2
+  addon_image: ""   # Required. e.g. quay.io/<your_namespace>/ibm-ccco-podvm-container-image:1.2.2.2 (push the image manually while Section 9 is disabled)
   kernel_path: ""   # e.g. /image/ccco-bm-2.0.11.img
   verify_addon_kernel_service: true   # false = skip kata-addon-kernel.service check (registry unreachable from workers)
 
@@ -47,3 +47,20 @@ cluster:
   # The playbook appends '/kubeconfig' automatically: auth_dir_path + '/kubeconfig'
   # Example: if your kubeconfig is at /root/auth/kubeconfig, set this to /root/auth
   auth_dir_path: ''  # e.g. /root/auth
+
+# TEMPORARILY DISABLED: Section 9 - Image Push / Pull (used by ccco_push_image and ccco_configure_image)
+# The matching steps in playbooks/ccco_install_cluster.yaml are commented out. To re-enable, uncomment
+# both this section and those two tasks.
+#
+# SECURITY NOTES:
+#   password   — do NOT store in plaintext. Use ansible-vault or an env var:
+#                  password: "{{ lookup('env', 'REGISTRY_PASSWORD') }}"
+#   pull-secret — ccco_configure_image writes user_name/password into the cluster-wide
+#                 openshift-config/pull-secret. Use a read-only robot account / service ID
+#                 rather than a push-capable credential.
+#
+# imagepull:
+#   registry_name: ""     # e.g. quay.io, icr.io, my-registry:5000
+#   user_name: ""         # registry username
+#   password: ""          # registry password / token / API key — see SECURITY NOTES above
+#   target_namespace: ""  # your org/namespace in the registry

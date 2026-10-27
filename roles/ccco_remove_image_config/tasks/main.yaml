@@ -1,0 +1,146 @@
+---
+# Role: ccco_remove_image_config
+# Purpose: Undo ccco_configure_image. Idempotent — safe to run if nothing was configured.
+#
+# Steps:
+#   1. Delete hyper-protect-pull-secret from the OSC namespace
+#   2. Remove our registry entry from the cluster-wide pull-secret - only if
+#      ccco_configure_image added it (annotation ccco.ibm.com/added-registry-key).
+#      An entry that existed before install is left untouched.
+#   3. If the cluster-wide pull-secret changed, wait for the MachineConfigPools to settle
+#
+# LIMITATION — the annotation stores ONE registry key at a time. If imagepull.registry_name
+# or imagepull.target_namespace was changed between the configure and remove runs, the
+# annotation will not match the key that was originally written, so the old auths entry
+# is left in pull-secret (the guard `added_registry_key == ccco_image_registry_key` is false).
+# Always run this role with the SAME all.yaml values that were used during configure.
+
+- name: Ensure kubernetes Python library is installed on bastion
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
+    executable: pip3
+
+- name: Delete hyper-protect-pull-secret from OSC namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: Secret
+    name: hyper-protect-pull-secret
+    namespace: openshift-sandboxed-containers-operator
+    state: absent
+
+- name: Get cluster-wide pull-secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: v1
+    kind: Secret
+    name: pull-secret
+    namespace: openshift-config
+  register: global_pull_secret
+  no_log: true
+
+- name: Read current cluster-wide pull-secret content
+  ansible.builtin.set_fact:
+    current_dockerconfig: "{{ global_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode | from_json }}"
+    added_registry_key: "{{ (global_pull_secret.resources[0].metadata.annotations | default({}, true))['ccco.ibm.com/added-registry-key'] | default('') }}"
+  no_log: true
+
+- name: Remove registry entry from cluster-wide pull-secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: pull-secret
+        namespace: openshift-config
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {{ current_dockerconfig
+             | combine({'auths': (current_dockerconfig.auths | default({}, true)) | dict2items | rejectattr('key', 'equalto', ccco_image_registry_key) | items2dict})
+             | to_json | b64encode }}
+  register: global_pull_secret_update
+  when: added_registry_key == ccco_image_registry_key and ccco_image_registry_key in (current_dockerconfig.auths | default({}, true))
+  no_log: true
+
+# Clear the marker so a later install can tell the entry is gone.
+# (A null value removes the annotation key when patching.)
+- name: Remove marker annotation from cluster-wide pull-secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    state: patched
+    api_version: v1
+    kind: Secret
+    name: pull-secret
+    namespace: openshift-config
+    definition:
+      metadata:
+        annotations:
+          ccco.ibm.com/added-registry-key: null
+  when: added_registry_key == ccco_image_registry_key
+
+- name: Report registry entry left untouched
+  ansible.builtin.debug:
+    msg: >-
+      Entry '{{ ccco_image_registry_key }}' in openshift-config/pull-secret was not added by this
+      automation (or is already gone) - nothing removed.
+  when: added_registry_key != ccco_image_registry_key
+
+# Pause 90s first so MCO has time to flip the pool to Updating=True.
+# A shorter pause risks the Updating=False + Updated=True conditions already
+# being satisfied from the pre-change steady state, causing the wait to return
+# immediately before the rollout has started.
+# Budget: 30 retries × 60s = 30 minutes per pool.
+- name: Pause 90s for MCO to detect the pull-secret change and start rolling out
+  ansible.builtin.pause:
+    seconds: 90
+  when: global_pull_secret_update is changed
+
+- name: Wait for master MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: master
+  register: mcp_master_ps_wait
+  until: >-
+    (mcp_master_ps_wait is succeeded) and
+    (mcp_master_ps_wait.resources | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_master_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
+
+- name: Wait for worker MachineConfigPool to settle after pull-secret change
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster.auth_dir_path }}/kubeconfig"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker
+  register: mcp_worker_ps_wait
+  until: >-
+    (mcp_worker_ps_wait is succeeded) and
+    (mcp_worker_ps_wait.resources | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updated') |
+      selectattr('status', 'equalto', 'True') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Updating') |
+      selectattr('status', 'equalto', 'False') | list | length > 0) and
+    (mcp_worker_ps_wait.resources[0].status.conditions |
+      selectattr('type', 'equalto', 'Degraded') |
+      selectattr('status', 'equalto', 'False') | list | length > 0)
+  retries: 30
+  delay: 60
+  when: global_pull_secret_update is changed
