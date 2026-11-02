@@ -1,9 +1,9 @@
 ---
 # Defaults for ccco_busybox_deploy
 # Image changed from busybox:stable (Docker Hub) to quay.io/prometheus/busybox to avoid
-# Docker Hub pull-rate limits on cluster nodes. Pinned to :latest tag pending a digest pin —
-# replace with a @sha256:... digest once the target digest is confirmed, e.g.:
-#   quay.io/prometheus/busybox@sha256:<digest>
-busybox_image: "quay.io/prometheus/busybox:latest"
+# Docker Hub pull-rate limits on cluster nodes. Pinned by digest (multi-arch manifest list,
+# includes s390x) so the workload image cannot change underneath the contract.
+# This digest was the quay.io/prometheus/busybox:latest manifest list when pinned.
+busybox_image: "quay.io/prometheus/busybox@sha256:7379672d53c28113469275f2eb48adffa19954f39f8ef20c1e2992278f658e6c"
 scripts_dir: "/root/ccco-artifacts"
 ccco_namespace: "default"
