@@ -258,7 +258,7 @@ ansible-playbook playbooks/ccco_cleanup.yaml
 | Playbook | What it removes |
 |---|---|
 | `ccco_cleanup.yaml` | Everything below, in order. Workloads go first because Kata depends on them, and SE goes last because it needs the node rollout to finish |
-| *(workload step of `ccco_cleanup.yaml`)* | Pods `paynow-ssl` and `busybox-cc`, service `paynow-ssl`, secrets `spoiler` and `sealed-paynow`, then deletes the whole `/root/ccco-artifacts` directory on the bastion. There is no standalone playbook for this step |
+| *(workload step of `ccco_cleanup.yaml`)* | Dynamically discovers and deletes all pods running with `runtimeClassName: kata-cc` across the cluster, service `paynow-ssl`, secrets `spoiler` and `sealed-paynow`, then deletes the whole `/root/ccco-artifacts` directory on the bastion. There is no standalone playbook for this step |
 | `ccco_clean_kata.yaml` | Deletes the `cluster-kataconfig` `KataConfig`, waits (up to 60 min) for it to be gone and for the MachineConfigPools to settle, and verifies the `kata-cc` RuntimeClass is removed |
 | `ccco_clean_osc.yaml` | Deletes the OSC Subscription, CSV, OperatorGroup and the `openshift-sandboxed-containers-operator` namespace |
 | `ccco_clean_nfd.yaml` | Deletes the `ibm-se-rule` `NodeFeatureRule`, the `NodeFeatureDiscovery` CR (clearing its finalizer), the NFD Subscription, CSV, OperatorGroup and the `openshift-nfd` namespace, then strips all `feature.node.kubernetes.io/*` and `ibm.feature.node.kubernetes.io/*` labels from every node |
@@ -313,7 +313,7 @@ ccco-provisioner/
     ├── ccco_sealed_secrets/                # Creates the spoiler and sealed-paynow secrets
     ├── ccco_paynow_deploy/                 # Builds the encrypted contract, generates paynow-baremetal.yaml
     ├── ccco_busybox_deploy/                # Builds the encrypted contract, generates busybox-baremetal.yaml
-    ├── ccco_remove_workload/               # Removes workload pods/service/secrets and the scripts directory
+    ├── ccco_remove_workload/               # Dynamically removes all kata-cc pods, service/secrets, and the scripts directory
     ├── ccco_remove_kata/                   # Removes KataConfig and Kata runtime
     ├── ccco_remove_osc/                    # Removes the OSC operator
     ├── ccco_remove_nfd/                    # Removes the NFD operator and node labels
