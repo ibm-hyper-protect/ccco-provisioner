@@ -38,7 +38,7 @@
           - "Artifacts : {{ scripts_dir }}"
           - "=========================================="
 
-    - name: Remove PayNow workload, Secrets and generated files
+    - name: Remove CCCO workloads (all kata-cc pods), Secrets and generated files
       ansible.builtin.import_role:
         name: ccco_remove_workload
 
